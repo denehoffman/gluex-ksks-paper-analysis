@@ -1,0 +1,292 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:github:gluex-ksks-paper-analysis:schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["cuts", "weights", "datasets", "plots", "fits", "variations"],
+  "$defs": {
+    "VariableType": {
+      "type": "string",
+      "enum": [
+        "ChiSqDOF",
+        "Proton_Z",
+        "aux_0_x",
+        "aux_0_y",
+        "aux_0_z",
+        "is_polarized",
+        "m_meson",
+        "ksb_costheta",
+        "m_baryon",
+        "hx_costheta",
+        "hx_phi",
+        "mandelstam_t",
+        "reduced_mandelstam_t",
+        "m_piplus1_piminus1",
+        "m_piplus2_piminus2",
+        "m_piplus1_piminus2",
+        "m_piplus2_piminus1",
+        "m_p_piplus1",
+        "m_p_piplus2",
+        "m_p_piminus1",
+        "m_p_piminus2",
+        "m_p_piplus1_piminus1",
+        "m_p_piplus1_piminus2",
+        "m_p_piplus2_piminus1",
+        "m_p_piplus2_piminus2",
+        "m_p_piminus1_piminus2"
+      ]
+    },
+    "WeightType": {
+      "type": "string",
+      "enum": ["accidental", "splot"]
+    },
+    "Limits2": {
+      "type": "array",
+      "prefixItems": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "number"
+        }
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    }
+  },
+  "properties": {
+    "cuts": {
+      "type": "object",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[A-Za-z0-9_\\-]+$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rules"],
+          "properties": {
+            "rules": {
+              "type": "array",
+              "minItems": 0,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "description": "One rule per string: '<var> <op> <number>'"
+            },
+            "cache": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        }
+      }
+    },
+    "weights": {
+      "type": "object",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[A-Za-z0-9_\\-]+$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["weight_type"],
+          "properties": {
+            "weight_type": {
+              "$ref": "#/$defs/WeightType"
+            },
+            "sig": {
+              "type": "string",
+              "minLength": 1
+            },
+            "bkg": {
+              "type": "string",
+              "minLength": 1
+            },
+            "cache": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+            "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "weight_type": {
+                    "const": "splot"
+                  }
+                }
+              },
+              "then": {
+                "required": ["sig", "bkg"]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "plots": {
+      "type": "object",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[A-Za-z0-9_\\-]+$": {
+          "type": "object",
+          "oneOf": [
+            {
+              "required": ["variable", "label", "bins", "limits"],
+              "additionalProperties": false,
+              "properties": {
+                "variable": {
+                  "$ref": "#/$defs/VariableType"
+                },
+                "label": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "bins": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "limits": {
+                  "$ref": "#/$defs/Limits2"
+                },
+                "units": {
+                  "type": "string",
+                  "default": ""
+                }
+              }
+            },
+            {
+              "required": ["x", "y"],
+              "additionalProperties": false,
+              "properties": {
+                "x": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "y": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "datasets": {
+      "type": "object",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[A-Za-z0-9_\\-]+$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "steps"],
+          "properties": {
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "steps": {
+              "type": "array",
+              "minItems": 0,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "fits": {
+      "type": "object",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[A-Za-z0-9_\\-]+$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["waves", "data", "accmc", "bins"],
+          "properties": {
+            "waves": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "data": {
+              "type": "string",
+              "minLength": 1
+            },
+            "accmc": {
+              "type": "string",
+              "minLength": 1
+            },
+            "bins": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "limits": {
+              "$ref": "#/$defs/Limits2",
+              "default": [1.0, 2.0]
+            },
+            "n_iterations": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 20
+            },
+            "n_bootstraps": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 100
+            }
+          }
+        }
+      }
+    },
+    "variations": {
+      "type": "object",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[A-Za-z0-9_\\-]+$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["plots", "fits"],
+          "properties": {
+            "plots": {
+              "type": "array",
+              "minItems": 0,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["dataset", "items"],
+                "properties": {
+                  "dataset": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "items": {
+                    "type": "array",
+                    "minItems": 0,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              }
+            },
+            "fits": {
+              "type": "array",
+              "minItems": 0,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,47 @@
+# Lines
+lines.linewidth: 0.5
+# Font
+font.serif: Computer Modern
+font.family: serif
+font.size: 10.0
+# LaTeX
+text.usetex: True
+text.latex.preamble: \usepackage{amsmath}\usepackage{amssymb}\usepackage{physics}
+# Axes
+axes.formatter.use_mathtext: True
+axes.formatter.limits: -3, 3
+axes.prop_cycle: cycler('color', ['377eb8', 'ff7f00', '4daf4a', 'e41a1c', '984ea3', 'a65628', 'f781bf', '999999', 'ffff33', '97bfe0', 'f28c8d'])
+# Ticks
+xtick.top: True
+xtick.major.size: 4.0
+xtick.minor.size: 2.5
+xtick.major.width: 1.2
+xtick.minor.width: 0.8
+xtick.direction: in
+xtick.minor.visible: True
+ytick.right: True
+ytick.major.size: 4.0
+ytick.minor.size: 2.5
+ytick.major.width: 1.2
+ytick.minor.width: 0.8
+ytick.direction: in
+ytick.minor.visible: True
+# Legend
+# legend.fancybox: False
+legend.frameon: True
+legend.fontsize: 6
+# Figure
+figure.autolayout: True
+# full width in pdf = 469.75502pt = 6.5in, 6.5/golden_ratio = 4.0
+# 80% -> 5.2 x 3.2
+# half width -> 3.25 x 2.0
+# double height -> 5.2 x 6.4
+figure.figsize: 5.2, 3.2
+# Images
+image.cmap: viridis
+# Error Bars
+errorbar.capsize: 0.0
+# Saving
+savefig.dpi: 1000
+savefig.format: png
+savefig.bbox: tight

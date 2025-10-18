@@ -1,0 +1,5 @@
+exclude = ["taplo.toml", "pyproject.toml"]
+
+[schema]
+path = "./src/gluex_ksks_paper_analysis/ksks_analysis_config.schema.json"
+enabled = true
