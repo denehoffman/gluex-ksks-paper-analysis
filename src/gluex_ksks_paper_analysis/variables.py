@@ -334,6 +334,10 @@ def add_alt_hypos(data: pl.LazyFrame) -> pl.LazyFrame:
         piplus2_lab = ld.Vec4(piplus2_px, piplus2_py, piplus2_pz, piplus2_e)
         piminus2_lab = ld.Vec4(piminus2_px, piminus2_py, piminus2_pz, piminus2_e)
         return {
+            'm_piplus1': piplus1_lab.m,
+            'm_piminus1': piminus1_lab.m,
+            'm_piplus2': piplus2_lab.m,
+            'm_piminu2': piminus2_lab.m,
             'm_piplus1_piminus1': (piplus1_lab + piminus1_lab).m,
             'm_piplus2_piminus2': (piplus2_lab + piminus2_lab).m,
             'm_piplus1_piminus2': (piplus1_lab + piminus2_lab).m,
@@ -376,6 +380,10 @@ def add_alt_hypos(data: pl.LazyFrame) -> pl.LazyFrame:
             process,
             return_dtype=pl.Struct(
                 {
+                    'm_piplus1': pl.Float64,
+                    'm_piminus1': pl.Float64,
+                    'm_piplus2': pl.Float64,
+                    'm_piminu2': pl.Float64,
                     'm_piplus1_piminus1': pl.Float64,
                     'm_piplus2_piminus2': pl.Float64,
                     'm_piplus1_piminus2': pl.Float64,
@@ -411,6 +419,10 @@ VARIABLE_MAPPINGS: dict[str, Callable[[pl.LazyFrame], pl.LazyFrame]] = {
     'mandelstam_t': add_mandelstam_t,
     'reduced_mandelstam_t': add_mandelstam_t,
     'alt_hypos': add_alt_hypos,
+    'm_piplus1': add_alt_hypos,
+    'm_piminus1': add_alt_hypos,
+    'm_piplus2': add_alt_hypos,
+    'm_piminus2': add_alt_hypos,
     'm_piplus1_piminus1': add_alt_hypos,
     'm_piplus2_piminus2': add_alt_hypos,
     'm_piplus1_piminus2': add_alt_hypos,
