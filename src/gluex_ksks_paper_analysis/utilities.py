@@ -1,19 +1,15 @@
 from __future__ import annotations
 
 import argparse
-import getpass
-import socket
-from pathlib import Path, UnsupportedOperation
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
-import paramiko
 import polars as pl
 import uproot
 from pint import Quantity, UnitRegistry
 
-from gluex_ksks_paper_analysis.environment import DATASET_PATH
 
 if TYPE_CHECKING:
     from matplotlib.figure import Figure
@@ -129,88 +125,3 @@ def root_to_dataframe(input_path: Path, tree: str = 'kin') -> pl.DataFrame:
     tt = uproot.open(f'{input_path}:{tree}')
     root_data = tt.arrays(library='np')
     return pl.from_dict(root_data)
-
-
-def connect_to_remote(
-    username: str,
-    hostname: str = 'ernest.phys.cmu.edu',
-    port: int = 22,
-) -> paramiko.SSHClient:
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    try:
-        client.connect(
-            hostname,
-            port=port,
-            username=username,
-            allow_agent=True,
-            look_for_keys=True,
-            timeout=15,
-        )
-    except (
-        paramiko.AuthenticationException,
-        FileNotFoundError,
-        paramiko.SSHException,
-        OSError,
-    ):
-        password = getpass.getpass(
-            f'Please enter the password for {username}@{hostname}'
-        )
-        client.connect(
-            hostname,
-            port=port,
-            username=username,
-            password=password,
-            allow_agent=False,
-            look_for_keys=False,
-            timeout=15,
-        )
-    return client
-
-
-def hardlink_or_copy(src: Path, dest: Path) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        dest.hardlink_to(src)
-    except (UnsupportedOperation, OSError):
-        src.copy(dest)
-
-
-def get_files(
-    remote_paths: list[Path],
-    local_dir: Path,
-    user: str,
-    hostname: str = 'ernest.phys.cmu.edu',
-    port: int = 22,
-) -> None:
-    local_dir.mkdir(parents=True, exist_ok=True)
-    if socket.getfqdn().endswith('.phys.cmu.edu'):
-        for src in remote_paths:
-            dest = local_dir / src.name
-            hardlink_or_copy(src, dest)
-        return
-
-    client = connect_to_remote(user, hostname, port)
-    sftp = client.open_sftp()
-    try:
-        for src in remote_paths:
-            dest = local_dir / src.name
-            sftp.get(str(src), str(dest))
-    finally:
-        sftp.close()
-        client.close()
-
-
-def download_data() -> None:
-    remote_dir = Path('/raid3/nhoffman/ksks-data')
-    remote_paths = [
-        remote_dir / f'{name}.parquet'
-        for name in ['data', 'sigmc', 'bkgmc']
-        if not (DATASET_PATH / f'{name}.parquet').exists()
-    ]
-    if remote_paths:
-        print(
-            'Some required data files were missing and need to be downloaded from ernest.phys.cmu.edu'
-        )
-        username = input('Please enter your username: ')
-        get_files(remote_paths, DATASET_PATH, username)

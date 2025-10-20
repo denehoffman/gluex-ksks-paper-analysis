@@ -15,3 +15,4 @@ wheels/
 # Data
 analysis/datasets
 analysis/databases
+analysis/analysis.log

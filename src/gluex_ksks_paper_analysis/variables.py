@@ -224,6 +224,7 @@ def add_hx_angles(data: pl.LazyFrame) -> pl.LazyFrame:
 
 
 def add_mandelstam_t(data: pl.LazyFrame) -> pl.LazyFrame:
+    # NOTE: these add -t and -t', not t and t'
     def process(struct) -> dict[str, float]:
         beam_px = struct['p4_0_Px']
         beam_py = struct['p4_0_Py']
@@ -264,8 +265,8 @@ def add_mandelstam_t(data: pl.LazyFrame) -> pl.LazyFrame:
         mandelstam_t = mandelstam_t_var.value(event)
         mandelstam_t_min = (beam_com - resonance_com_min).mag2
         return {
-            'mandelstam_t': mandelstam_t,
-            'reduced_mandelstam_t': mandelstam_t - mandelstam_t_min,
+            'mandelstam_t': -mandelstam_t,
+            'reduced_mandelstam_t': -(mandelstam_t - mandelstam_t_min),
         }
 
     return data.with_columns(
@@ -427,6 +428,8 @@ VARIABLE_MAPPINGS: dict[str, Callable[[pl.LazyFrame], pl.LazyFrame]] = {
 
 
 def add_variable(name: str, df: pl.LazyFrame) -> pl.LazyFrame:
+    if name in df:
+        return df
     mapping = VARIABLE_MAPPINGS.get(name)
     if mapping is not None:
         return mapping(df)

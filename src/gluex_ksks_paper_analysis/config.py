@@ -6,7 +6,7 @@ import pickle
 import re
 import tomllib
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from tqdm.auto import trange
 from functools import reduce
 from importlib import resources
 from pathlib import Path
@@ -19,6 +19,7 @@ import polars as pl
 from jsonschema import Draft202012Validator
 from numpy.typing import NDArray
 from pint import Quantity, Unit, UnitRegistry
+from loguru import logger
 
 from gluex_ksks_paper_analysis.databases import CCDBData, get_all_polarized_run_numbers
 from gluex_ksks_paper_analysis.environment import (
@@ -26,9 +27,8 @@ from gluex_ksks_paper_analysis.environment import (
     CMAP,
     DATASET_PATH,
     FITS_PATH,
-    GRAY,
-    LIGHT_BLUE,
-    LIGHT_RED,
+    BLUE,
+    RED,
     NORM,
     PLOTS_PATH,
 )
@@ -118,7 +118,7 @@ class Cut:
     cache: bool = False
 
     def apply(self, df: pl.LazyFrame) -> pl.LazyFrame:
-        print(f'Applying cuts: {self.rules}')
+        logger.info(f'Applying cuts: {self.rules}')
         exprs: list[pl.Expr] = []
         for rule in self.rules:
             m = _RULE_REGEX.fullmatch(rule)
@@ -156,7 +156,9 @@ class Weight:
         df_bkgmc: pl.LazyFrame,
         is_mc: bool = False,
     ) -> pl.LazyFrame:
-        print(f'Applying weight: {self.weight_type} (sig={self.sig}, bkg={self.bkg})')
+        logger.info(
+            f'Applying weight: {self.weight_type} (sig={self.sig}, bkg={self.bkg})'
+        )
         match self.weight_type:
             case 'accidental':
                 ccdb = CCDBData()
@@ -289,7 +291,7 @@ class Plot1D:
             return f'Counts / ${bin_width:~L}$'
 
     def write(self, df: pl.LazyFrame, output_path: Path) -> None:
-        print(f'Writing plot: {output_path}')
+        logger.info(f'Writing plot: {output_path}')
         plt.style.use('gluex_ksks_paper_analysis.style')
         _, ax = plt.subplots()
         df = add_variable(self.variable, df)
@@ -310,6 +312,7 @@ class Plot1D:
         )
         ax.set_xlabel(self.xlabel)
         ax.set_ylabel(self.ylabel)
+        logger.info(f'Saving plot: {output_path}')
         plt.savefig(output_path)
         plt.close()
 
@@ -322,7 +325,7 @@ class Plot2D:
     def write(
         self, df: pl.LazyFrame, output_path: Path, plots1d: dict[str, Plot1D]
     ) -> None:
-        print(f'Writing plot: {output_path}')
+        logger.info(f'Writing plot: {output_path}')
         hist_plot_x = plots1d[self.x]
         hist_plot_y = plots1d[self.y]
         plt.style.use('gluex_ksks_paper_analysis.style')
@@ -344,6 +347,7 @@ class Plot2D:
         )
         ax.set_xlabel(hist_plot_x.xlabel)
         ax.set_ylabel(hist_plot_y.xlabel)
+        logger.info(f'Saving plot: {output_path}')
         plt.savefig(output_path)
         plt.close()
 
@@ -354,18 +358,15 @@ class Dataset:
     steps: list[str]
 
     def df(self, cuts: dict[str, Cut], weights: dict[str, Weight]) -> pl.LazyFrame:
-        print(f'Obtaining dataset: {self.source}{self.steps}')
+        logger.debug(f'Fetching dataset: {self.source} ({self.steps})')
 
         def get_from_steps(steps: list[str]) -> pl.LazyFrame:
             path = DATASET_PATH
             for step in steps:
                 path /= step
             path /= self.source
-            print(f'Checking {path}')
             if path.exists():
-                print(f'{path} exists, reading from disk')
                 return pl.scan_parquet(path)
-            print(f'{path} does not exist, processing')
             df = get_from_steps(steps[:-1])
             last_step = steps[-1]
             if last_step in cuts and last_step in weights:
@@ -403,6 +404,7 @@ class FitResult:
     fits: list[ld.MinimizationSummary]
     bootstraps: list[list[ld.MinimizationSummary]]
     bin_edges: NDArray
+    projections: dict[str, Histogram]
 
     @property
     def bins(self) -> int:
@@ -443,6 +445,7 @@ class Fit:
             'aux_0_x',
             'aux_0_y',
             'aux_0_z',
+            'weight',
         ]
     )
 
@@ -453,16 +456,18 @@ class Fit:
         cuts: dict[str, Cut],
         weights: dict[str, Weight],
     ):
-        print(f'Running fit: {name}')
         fit_path = FITS_PATH
         for step in datasets[self.data].steps:
             fit_path /= step
         fit_path /= name + '.pkl'
 
         if not fit_path.exists():
+            logger.info(f'Running fit: {name}')
             fit_result = self.fit_waves(datasets, cuts, weights)
+            fit_path.parent.mkdir(parents=True, exist_ok=True)
             pickle.dump(fit_result, fit_path.open('wb'))
         else:
+            logger.info(f'Skipping fit: {name}')
             fit_result = pickle.load(fit_path.open('rb'))
 
         plot_path = PLOTS_PATH
@@ -470,14 +475,17 @@ class Fit:
             plot_path /= step
         plot_path /= name + '.png'
         if not plot_path.exists():
-            projection = self.project_fit(fit_result)
-            self.plot_fit(Path(plot_path), fit_result, projection)
+            logger.info(f'Plotting fit: {name}')
+            self.plot_fit(Path(plot_path), fit_result)
+        else:
+            logger.info(f'Skipping plot: {name}')
 
     def fit_waves(
         self,
         datasets: dict[str, Dataset],
         cuts: dict[str, Cut],
         weights: dict[str, Weight],
+        genmc: str | None = None,
         seed: int = 0,
     ) -> FitResult:
         df_data = datasets[self.data].df(cuts, weights)
@@ -492,29 +500,21 @@ class Fit:
             df_accmc.select(self.required_columns).collect(),
             rest_frame_indices=[1, 2, 3],
         )
-        model = build_model([Wave(w) for w in self.waves])
+        waves = [Wave(w) for w in self.waves]
+        model = build_model(waves)
         mass = ld.Mass([2, 3])
         ds_data_binned = ds_data.bin_by(mass, self.bins, self.limits)
         ds_accmc_binned = ds_accmc.bin_by(mass, self.bins, self.limits)
         rng = np.random.default_rng(seed)
         best_fits: list[ld.MinimizationSummary] = []
         bootstraps: list[list[ld.MinimizationSummary]] = []
-        start = datetime.now(tz=UTC)
-        print('Starting fit', start)
-        for ibin in range(self.bins):
-            end = datetime.now(tz=UTC)
-            print(f'Starting fit for bin {ibin} {end - start}')
-            start = end
+        for ibin in trange(self.bins, desc='Bins'):
             nll_ibin = ld.NLL(model, ds_data_binned[ibin], ds_accmc_binned[ibin])
             best_fit_ibin = None
-            for iiter in range(self.n_iterations):
-                end = datetime.now(tz=UTC)
-                print(f'Starting iteration {iiter} {end - start}')
-                start = end
+            for iiter in trange(self.n_iterations, desc='Iterations'):
                 p0 = rng.uniform(-100.0, 100.0, len(nll_ibin.parameters))
-                res = nll_ibin.minimize(
-                    p0, max_steps=100, settings={'skip_hessian': True}
-                )
+                res = nll_ibin.minimize(p0, settings={'skip_hessian': True})
+                res = nll_ibin.minimize(res.x, method='nelder-mead')
                 if best_fit_ibin is None or res.fx < best_fit_ibin.fx:
                     best_fit_ibin = res
             if best_fit_ibin is None:
@@ -522,50 +522,20 @@ class Fit:
                 raise RuntimeError(msg)
             best_fits.append(best_fit_ibin)
             bootstraps_ibin: list[ld.MinimizationSummary] = []
-            for iboot in range(self.n_bootstraps):
-                end = datetime.now(tz=UTC)
-                print(f'Starting bootstrap {iboot} {end - start}')
-                start = end
+            for iboot in trange(self.n_bootstraps, desc='Bootstraps'):
                 nll_iboot = ld.NLL(
                     model, ds_data_binned[ibin].bootstrap(iboot), ds_accmc_binned[ibin]
                 )
                 bootstrap_res = nll_iboot.minimize(
                     best_fit_ibin.x, settings={'skip_hessian': True}
                 )
+                bootstrap_res = nll_iboot.minimize(
+                    bootstrap_res.x, method='nelder-mead'
+                )
                 bootstraps_ibin.append(bootstrap_res)
             bootstraps.append(bootstraps_ibin)
         bin_edges = np.histogram_bin_edges([], self.bins, range=self.limits)
-        return FitResult(
-            self.data, self.accmc, self.waves, best_fits, bootstraps, bin_edges
-        )
-
-    def project_fit(
-        self,
-        fit_result: FitResult,
-        datasets: dict[str, Dataset],
-        cuts: dict[str, Cut],
-        weights: dict[str, Weight],
-        genmc: str | None = None,
-    ) -> dict[str, Histogram]:
-        start = datetime.now(tz=UTC)
-        print('Projecting fit', start)
-        df_data = datasets[self.data].df(cuts, weights)
-        df_data = add_variable('polarization', df_data)
-        df_accmc = datasets[self.accmc].df(cuts, weights)
-        df_accmc = add_variable('polarization', df_accmc)
-        ds_data = ld.Dataset.from_polars(
-            df_data.select(self.required_columns).collect(),
-            rest_frame_indices=[1, 2, 3],
-        )
-        ds_accmc = ld.Dataset.from_polars(
-            df_accmc.select(self.required_columns).collect(),
-            rest_frame_indices=[1, 2, 3],
-        )
-
-        model = build_model(fit_result.waves)
-        mass = ld.Mass([2, 3])
-        ds_data_binned = ds_data.bin_by(mass, fit_result.bins, fit_result.limits)
-        ds_accmc_binned = ds_accmc.bin_by(mass, fit_result.bins, fit_result.limits)
+        logger.info('Projecting fit results...')
         if genmc is not None:
             df_genmc = datasets[genmc].df(cuts, weights)
             df_genmc = add_variable('polarization', df_genmc)
@@ -573,52 +543,45 @@ class Fit:
                 df_genmc.select(self.required_columns).collect(),
                 rest_frame_indices=[1, 2, 3],
             )
-            ds_genmc_binned = ds_genmc.bin_by(mass, fit_result.bins, fit_result.limits)
+            ds_genmc_binned = ds_genmc.bin_by(mass, self.bins, self.limits)
         else:
             ds_genmc_binned = None
-        result: dict[str, Histogram] = {
-            str(wave): Histogram.empty(fit_result.bins, fit_result.limits)
-            for wave in fit_result.waves
+        projections: dict[str, Histogram] = {
+            str(wave): Histogram.empty(self.bins, self.limits) for wave in waves
         }
-        result['total'] = Histogram.empty(fit_result.bins, fit_result.limits)
-        result['data'] = Histogram.empty(fit_result.bins, fit_result.limits)
-        for ibin in range(fit_result.bins):
-            end = datetime.now(tz=UTC)
-            print(f'Projecting bin {ibin} {end - start}')
-            start = end
+        projections['total'] = Histogram.empty(self.bins, self.limits)
+        projections['data'] = Histogram.empty(self.bins, self.limits)
+        for ibin in trange(self.bins, desc='Bins'):
             nll_ibin = ld.NLL(model, ds_data_binned[ibin], ds_accmc_binned[ibin])
             ds_genmc_ibin = None if ds_genmc_binned is None else ds_genmc_binned[ibin]
-            result_ibin = fit_result.fits[ibin]
-            bootstraps_ibin = fit_result.bootstraps[ibin]
+            result_ibin = best_fits[ibin]
+            bootstraps_ibin = bootstraps[ibin]
             genmc_evaluator = (
                 None if ds_genmc_ibin is None else model.load(ds_genmc_ibin)
             )
-            result['total'].counts[ibin] = np.sum(
+            projections['total'].counts[ibin] = np.sum(
                 nll_ibin.project(result_ibin.x, mc_evaluator=genmc_evaluator)
             )
-            result['total'].errors[ibin] = np.std(
+            projections['total'].errors[ibin] = np.std(
                 [
                     np.sum(nll_ibin.project(bootstrap.x, mc_evaluator=genmc_evaluator))
                     for bootstrap in bootstraps_ibin
                 ],
                 ddof=1,
             )
-            result['data'].counts[ibin] = ds_data_binned[ibin].n_events_weighted
-            result['data'].errors[ibin] = np.sqrt(
+            projections['data'].counts[ibin] = ds_data_binned[ibin].n_events_weighted
+            projections['data'].errors[ibin] = np.sqrt(
                 np.sum(np.power(ds_data_binned[ibin].weights, 2))
             )
-            for wave in fit_result.waves:
-                end = datetime.now(tz=UTC)
-                print(f'Projecting wave {wave!s} {end - start}')
-                start = end
-                result[str(wave)].counts[ibin] = np.sum(
+            for wave in waves:
+                projections[str(wave)].counts[ibin] = np.sum(
                     nll_ibin.project_with(
                         result_ibin.x,
                         wave.amplitude_names,
                         mc_evaluator=genmc_evaluator,
                     )
                 )
-                result[str(wave)].errors[ibin] = np.std(
+                projections[str(wave)].errors[ibin] = np.std(
                     [
                         np.sum(
                             nll_ibin.project_with(
@@ -631,11 +594,16 @@ class Fit:
                     ],
                     ddof=1,
                 )
-        return result
+        return FitResult(
+            self.data, self.accmc, waves, best_fits, bootstraps, bin_edges, projections
+        )
 
-    def plot_fit(
-        self, plot_path: Path, fit_result: FitResult, projections: dict[str, Histogram]
-    ) -> None:
+    def plot_fit(self, plot_path: Path, fit_result: FitResult) -> None:
+        ureg = UnitRegistry()
+        unit = ureg.parse_units('GeV/c^2')
+        width = float(np.diff(fit_result.bin_edges)[0])
+        bin_width = Quantity(width, unit).to_compact()
+        bin_width = Quantity(round(bin_width.m, 2), bin_width.u)
         plt.style.use('gluex_ksks_paper_analysis.style')
         _, ax = plt.subplots(nrows=1, ncols=2, sharey=True)
         s_waves = [wave for wave in fit_result.waves if wave.j == AngularMomentum.S]
@@ -643,51 +611,40 @@ class Fit:
         ax_waves = [s_waves, d_waves]
         for i in [0, 1]:
             ax[i].stairs(
-                projections['data'].counts,
-                projections['data'].edges,
+                fit_result.projections['data'].counts,
+                fit_result.projections['data'].edges,
                 color=BLACK,
                 label='Data',
             )
             ax[i].errorbar(
-                projections['data'].centers,
-                projections['data'].counts,
-                yerr=projections['data'].errors,
+                fit_result.projections['data'].centers,
+                fit_result.projections['data'].counts,
+                yerr=fit_result.projections['data'].errors,
                 ls='none',
                 color=BLACK,
             )
-            ax[i].stairs(
-                projections['total'].counts,
-                projections['total'].edges,
-                color=GRAY,
-                label='Fit Total',
-            )
-            ax[i].errorbar(
-                projections['total'].centers,
-                projections['total'].counts,
-                yerr=projections['total'].errors,
-                ls='none',
-                color=GRAY,
-            )
+            # NOTE: we omit the totals since they are equal to the data by construction
+            # Additionally, there is no information gained from the error bars on totals
+            # since they come from the variance in the sum of weights in bootstrapped datasets
             for wave in ax_waves[i]:
                 color = (
-                    LIGHT_RED
-                    if wave.r is None
-                    else (LIGHT_RED if wave.r == Reflectivity.Positive else LIGHT_BLUE)
+                    RED if wave.r is None or wave.r == Reflectivity.Positive else BLUE
                 )
-                ax[i].stairs(
-                    projections[str(wave)].counts,
-                    projections[str(wave)].edges,
+                ax[i].errorbar(
+                    fit_result.projections[str(wave)].centers,
+                    fit_result.projections[str(wave)].counts,
+                    yerr=fit_result.projections[str(wave)].errors,
+                    linestyle='none',
+                    marker='o',
+                    markersize=2,
                     color=color,
                     label=wave.latex,
                 )
-                ax[i].errorbar(
-                    projections[str(wave)].centers,
-                    projections[str(wave)].counts,
-                    yerr=projections[str(wave)].errors,
-                    ls='none',
-                    color=color,
-                )
             ax[i].legend()
+            ax[i].set_ylim(0)
+            ax[i].set_xlabel(f'Invariant Mass of $K_S^0K_S^0$ (${unit:~L}$)')
+        ax[0].set_ylabel(f'Counts / ${bin_width:~L}$')
+        logger.info(f'Saving plot: {plot_path}')
         plt.savefig(plot_path)
 
 
@@ -704,20 +661,31 @@ class Plots:
         plots: dict[str, Plot1D | Plot2D],
     ) -> None:
         ds = datasets[self.dataset]
-        df = ds.df(cuts, weights)
         plots1d = {k: v for k, v in plots.items() if isinstance(v, Plot1D)}
-        for plot_str, plot in plots.items():
-            plot_path = PLOTS_PATH
-            for step in datasets[self.dataset].steps:
-                plot_path /= step
-            base = ds.source.replace('.parquet', '_')
-            plot_path /= base + plot_str + '.png'
-            if not plot_path.exists():
+
+        def build_path(steps: list[str], source: str, plot_name: str) -> Path:
+            path = PLOTS_PATH
+            for step in steps:
+                path /= step
+            base = source.replace('.parquet', '_')
+            return path / f'{base}{plot_name}.png'
+
+        def render_for(dataset: Dataset) -> None:
+            dataframe = dataset.df(cuts, weights)
+            for name, plot in plots.items():
+                plot_path = build_path(dataset.steps, dataset.source, name)
+                if plot_path.exists():
+                    logger.info(f'Plot already exists: {plot_path}, skipping')
+                    continue
                 plot_path.parent.mkdir(parents=True, exist_ok=True)
                 if isinstance(plot, Plot1D):
-                    plot.write(df, plot_path)
+                    plot.write(dataframe, plot_path)
                 else:
-                    plot.write(df, plot_path, plots1d)
+                    plot.write(dataframe, plot_path, plots1d)
+
+        for i in range(len(ds.steps) + 1):
+            ds_i = Dataset(ds.source, ds.steps[:i])
+            render_for(ds_i)
 
 
 @dataclass(frozen=True)
@@ -734,10 +702,8 @@ class Variation:
         fits: dict[str, Fit],
     ) -> None:
         for plot_set in self.plots:
-            print(f'Making plots {plot_set}')
             plot_set.make_plots(datasets, cuts, weights, plots)
         for fit in self.fits:
-            print(f'Running fit {fit}')
             fits[fit].fit(fit, datasets, cuts, weights)
 
 
@@ -784,41 +750,46 @@ def _check_semantics(raw: dict) -> None:  # noqa: PLR0912
     for plot_name, plot in plots.items():
         if 'x' in plot or 'y' in plot:
             x, y = plot.get('x'), plot.get('y')
-            if x not in plot1d_names or y not in plot1d_names:
-                # TODO: better error message
-                msg = f"2D plot '{plot_name}' must reference 1D plots; missing '{x}' or '{y}'"
+            if x not in plot1d_names:
+                msg = (
+                    f"2D plot '{plot_name}' must reference 1D plots; missing x = '{x}'"
+                )
+                raise ConfigError(msg)
+            if y not in plot1d_names:
+                msg = (
+                    f"2D plot '{plot_name}' must reference 1D plots; missing y = '{y}'"
+                )
                 raise ConfigError(msg)
 
-    # TODO: rename
-    for fname, f in fits.items():
+    for fit_name, fit in fits.items():
         for ref in ('data', 'accmc'):
-            if f[ref] not in dataset_names:
-                msg = f"Unknown dataset '{f[ref]}' in fit '{fname}'"
+            if fit[ref] not in dataset_names:
+                msg = f"Unknown dataset '{fit[ref]}' in fit '{fit_name}'"
                 raise ConfigError(msg)
 
-    for vname, v in variations.items():
-        for psel in v.get('plots', []):
+    for variation_name, variation in variations.items():
+        for psel in variation.get('plots', []):
             ds = psel['dataset']
             if ds not in dataset_names:
-                msg = f"Unknown dataset '{ds}' in variation '{vname}'"
+                msg = f"Unknown dataset '{ds}' in variation '{variation_name}'"
                 raise ConfigError(msg)
             for item in psel.get('items', []):
                 if item not in plot_names:
-                    msg = f"Unknown plot '{item}' in variation '{vname}'"
+                    msg = f"Unknown plot '{item}' in variation '{variation_name}'"
                     raise ConfigError(msg)
-        for fref in v.get('fits', []):
+        for fref in variation.get('fits', []):
             if fref not in fit_names:
-                msg = f"Unknown fit '{fref}' in variation '{vname}'"
+                msg = f"Unknown fit '{fref}' in variation '{variation_name}'"
                 raise ConfigError(msg)
 
-    for cname, c in cuts.items():
-        for rule in c.get('rules', []):
+    for cut_name, cut in cuts.items():
+        for rule in cut.get('rules', []):
             m = _RULE_REGEX.match(rule)
             if not m:
-                msg = f"Invalid rule '{rule}' in cut '{cname}' (use '<var> <op> <number>')"
+                msg = f"Invalid rule '{rule}' in cut '{cut_name}' (use '<var> <op> <number>')"
                 raise ConfigError(msg)
             if m.group('var') not in _VARIABLES:
-                msg = f"Unknown variable '{m.group('var')}' in cut '{cname}'"
+                msg = f"Unknown variable '{m.group('var')}' in cut '{cut_name}'"
                 raise ConfigError(msg)
 
 

@@ -120,7 +120,6 @@ def build_model(waves: list[Wave]) -> ld.Model:
             raise ValueError(msg)
         simple_sum = ld.amplitude_sum([w.register(m) for w in simple_waves])
         expr = simple_sum.norm_sqr()
-        print(expr)
         return m.model(expr)
     pos_sum = [w.register(m) for w in positive_waves]
     pos_sum_re = ld.amplitude_sum([w[0] for w in pos_sum])
@@ -134,5 +133,4 @@ def build_model(waves: list[Wave]) -> ld.Model:
         + neg_sum_re.norm_sqr()
         + neg_sum_im.norm_sqr()
     )
-    print(expr)
     return m.model(expr)

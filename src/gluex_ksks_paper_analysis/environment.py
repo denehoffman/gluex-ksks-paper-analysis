@@ -13,6 +13,10 @@ REPORTS_PATH = ANALYSIS_PATH / 'reports'
 DATABASE_PATH = ANALYSIS_PATH / 'databases'
 RCDB_CONNECTION = DATABASE_PATH / 'rcdb.sqlite'
 CCDB_CONNECTION = DATABASE_PATH / 'ccdb.sqlite'
+POLARIZED_RUN_NUMBERS_PATH = DATABASE_PATH / 'polarized_run_numbers.pickle'
+PSFLUX_PATH = DATABASE_PATH / 'psflux.pickle'
+CCDB_PATH = DATABASE_PATH / 'ccdb.pickle'
+RCDB_PATH = DATABASE_PATH / 'rcdb.pickle'
 
 POL_HIST_PATHS = {
     's17': DATABASE_PATH / 's17.root',
@@ -52,5 +56,6 @@ def mkdirs() -> None:
     ANALYSIS_PATH.mkdir(parents=True, exist_ok=True)
     DATASET_PATH.mkdir(parents=True, exist_ok=True)
     PLOTS_PATH.mkdir(parents=True, exist_ok=True)
+    FITS_PATH.mkdir(parents=True, exist_ok=True)
     REPORTS_PATH.mkdir(parents=True, exist_ok=True)
     DATABASE_PATH.mkdir(parents=True, exist_ok=True)

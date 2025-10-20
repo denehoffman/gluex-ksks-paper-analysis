@@ -194,7 +194,6 @@ def extended_unbinned_nll(
     nll = (n_s + n_b) - np.sum(weights * terms)
     nll += float(signal.log_penalty(theta_s)) + float(background.log_penalty(theta_b))
     nll *= 2.0
-    print(nll)
     return float(nll)
 
 
@@ -317,7 +316,6 @@ def fit_mixture(
         method='Nelder-Mead',
         bounds=bounds,
     )
-    print(res)
 
     n_s, n_b = res.x[0], res.x[1]
     theta_s_fit = res.x[2 : 2 + n_theta_s]

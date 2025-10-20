@@ -29,10 +29,17 @@ limits = [1.0, 2.0]
 
 [plots.chisqdof]
 variable = "ChiSqDOF"
-label  = "$\\chi^2$/NDF"
-units   = ""
-bins   = 50
+label = "$\\chi^2$/NDF"
+units = ""
+bins = 50
 limits = [0.0, 10.0]
+
+[plots.mandelstam_t]
+variable = "reduced_mandelstam_t"
+label = "$-t$"
+units = "GeV^2/c^2"
+bins = 50
+limits = [0.0, 1.5]
 
 [datasets.data]
 source = "data.parquet"
@@ -63,6 +70,8 @@ waves = ["S+0+", "D+2+"]
 data = "data"
 accmc = "accmc"
 bins = 50
+n_iterations=10
+n_bootstraps=10
 
 [fits.spnd2p]
 waves = ["S+0+", "S+0-", "D+2+"]
@@ -97,20 +106,20 @@ bins = 50
 [variations.default]
 fits = ["spd2p", "spnd2p"]
 plots = [
-  { dataset = "data",  items = ["mass", "chisqdof"] },
-  { dataset = "accmc", items = ["mass"] }
+  { dataset = "data",  items = ["mass", "chisqdof", "mandelstam_t"] },
+  { dataset = "accmc", items = ["mass", "mandelstam_t"] }
 ]
 
 [variations.low_t]
 fits = ["spd2p_low_t", "spnd2p_low_t"]
 plots = [
-  { dataset = "data_low_t",  items = ["mass", "chisqdof"] },
-  { dataset = "accmc_low_t", items = ["mass"] }
+  { dataset = "data_low_t",  items = ["mass", "chisqdof", "mandelstam_t"] },
+  { dataset = "accmc_low_t", items = ["mass", "mandelstam_t"] }
 ]
 
 [variations.high_t]
 fits = ["spd2p_high_t", "spnd2p_high_t"]
 plots = [
-  { dataset = "data_high_t",  items = ["mass", "chisqdof"] },
-  { dataset = "accmc_high_t", items = ["mass"] }
+  { dataset = "data_high_t",  items = ["mass", "chisqdof", "mandelstam_t"] },
+  { dataset = "accmc_high_t", items = ["mass", "mandelstam_t"] }
 ]

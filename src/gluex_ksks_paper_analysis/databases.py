@@ -5,24 +5,24 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, TypedDict
+from typing import TypedDict
 
 import numpy as np
-import requests
 import uproot
 from uproot.behaviors.TBranch import HasBranches
 from uproot.reading import ReadOnlyDirectory
+from loguru import logger
 
 from gluex_ksks_paper_analysis.environment import (
     CCDB_CONNECTION,
-    DATABASE_PATH,
+    CCDB_PATH,
     POL_HIST_PATHS,
+    POLARIZED_RUN_NUMBERS_PATH,
+    PSFLUX_PATH,
     RCDB_CONNECTION,
+    RCDB_PATH,
 )
 from gluex_ksks_paper_analysis.utilities import Histogram
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 RCDB_SELECTION_PREFIX = """
 WITH status AS (
@@ -103,46 +103,7 @@ REST_VERSION_TIMESTAMPS = {
 }
 
 
-def download_file(url: str, path: Path) -> None:
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-            'AppleWebKit/537.36 (KHTML, like Gecko) '
-            'Chrome/124.0.0.0 Safari/537.36'
-        }
-        print(f'Downloading file from <{url}>')
-        response = requests.get(url, headers=headers, stream=True, timeout=10)
-        response.raise_for_status()
-
-        with path.open('wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        print(f"File '{path}' downloaded successfully.")
-    except requests.RequestException as e:
-        print(f'Error downloading file: {e}')
-
-
-def get_rcdb() -> None:
-    if not RCDB_CONNECTION.exists():
-        download_file('https://halldweb.jlab.org/dist/rcdb.sqlite', RCDB_CONNECTION)
-
-
-def get_ccdb() -> None:
-    if not CCDB_CONNECTION.exists():
-        download_file('https://halldweb.jlab.org/dist/ccdb.sqlite', CCDB_CONNECTION)
-
-
 def build_caches() -> None:
-    skip_rcdb = (
-        RCDBData.PATH.exists()
-        and PSFlux.PATH.exists()
-        and (DATABASE_PATH / 'polarized_run_numbers.pickle').exists()
-    )
-    skip_ccdb = CCDBData.PATH.exists() and PSFlux.PATH.exists()
-    if not skip_rcdb:
-        get_rcdb()
-    if not skip_ccdb:
-        get_ccdb()
     _ = RCDBData()
     _ = CCDBData()
     _ = PSFlux()
@@ -175,9 +136,9 @@ def get_pol_angle(run_period: str | None, angle_deg: str) -> float | None:
 
 
 def get_all_polarized_run_numbers() -> set[int]:
-    PATH = DATABASE_PATH / 'polarized_run_numbers.pickle'
-    if PATH.exists():
-        return pickle.load(PATH.open('rb'))  # noqa: S301
+    if POLARIZED_RUN_NUMBERS_PATH.exists():
+        return pickle.load(POLARIZED_RUN_NUMBERS_PATH.open('rb'))  # noqa: S301
+    logger.info('Building polarized run numbers cache...')
     with sqlite3.connect(RCDB_CONNECTION) as rcdb:
         cursor = rcdb.cursor()
         query = f"""
@@ -190,7 +151,7 @@ def get_all_polarized_run_numbers() -> set[int]:
         """  # noqa: S608
         cursor.execute(query)
         res = {r[0] for r in cursor.fetchall()}
-        pickle.dump(res, PATH.open('wb'))
+        pickle.dump(res, POLARIZED_RUN_NUMBERS_PATH.open('wb'))
         return res
 
 
@@ -261,8 +222,6 @@ class PSFluxHistograms(TypedDict):
 
 class PSFlux:
     # NOTE: luminosity is in inverse picobarns
-    PATH: Path = DATABASE_PATH / 'psflux.pickle'
-
     def __init__(self) -> None:
         self.df_scale: dict[int, float] = {}
         self.df_ps_accept: dict[int, tuple[float, float, float]] = {}
@@ -273,8 +232,8 @@ class PSFlux:
         self.df_tagh_scaled_energy: dict[int, list[tuple[float, float]]] = {}
         self.df_photon_endpoint_calib: dict[int, float] = {}
         self.df_target_scattering_centers: dict[int, tuple[float, float]] = {}
-        if self.PATH.exists():
-            with self.PATH.open('rb') as f:
+        if PSFLUX_PATH.exists():
+            with PSFLUX_PATH.open('rb') as f:
                 state = pickle.load(f)  # noqa: S301
                 self.df_scale = state['df_scale']
                 self.df_ps_accept = state['df_ps_accept']
@@ -288,6 +247,7 @@ class PSFlux:
                     'df_target_scattering_centers'
                 ]
         else:
+            logger.info('Building Pair Spectrometer Flux cache...')
             state = self._build_from_db()
             self.df_scale = state['df_scale']
             self.df_ps_accept = state['df_ps_accept']
@@ -298,8 +258,8 @@ class PSFlux:
             self.df_tagh_scaled_energy = state['df_tagh_scaled_energy']
             self.df_photon_endpoint_calib = state['df_photon_endpoint_calib']
             self.df_target_scattering_centers = state['df_target_scattering_centers']
-            self.PATH.parent.mkdir(parents=True, exist_ok=True)
-            with self.PATH.open('wb') as f:
+            PSFLUX_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with PSFLUX_PATH.open('wb') as f:
                 pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     @staticmethod
@@ -551,17 +511,16 @@ class ScalingFactors:
 
 
 class CCDBData:
-    PATH = DATABASE_PATH / 'ccdb.pickle'
-
     def __init__(self) -> None:
         self.accidental_scaling_factors: dict[int, ScalingFactors] = {}
-        if self.PATH.exists():
-            with self.PATH.open('rb') as f:
+        if CCDB_PATH.exists():
+            with CCDB_PATH.open('rb') as f:
                 self.accidental_scaling_factors = pickle.load(f)  # noqa: S301
         else:
+            logger.info('Building CCDB cache...')
             self.accidental_scaling_factors = self._build_from_db()
-            self.PATH.parent.mkdir(parents=True, exist_ok=True)
-            with self.PATH.open('wb') as f:
+            CCDB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with CCDB_PATH.open('wb') as f:
                 pickle.dump(
                     self.accidental_scaling_factors, f, protocol=pickle.HIGHEST_PROTOCOL
                 )
@@ -633,18 +592,17 @@ class CCDBData:
 
 
 class RCDBData:
-    PATH = DATABASE_PATH / 'rcdb.pickle'
-
     def __init__(self) -> None:
         self.pol_angle_data: dict[int, tuple[str, str, float]] = {}
         self.pol_magnitudes: dict[str, dict[str, Histogram]] = {}
-        if self.PATH.exists():
-            with self.PATH.open('rb') as f:
+        if RCDB_PATH.exists():
+            with RCDB_PATH.open('rb') as f:
                 self.pol_angle_data, self.pol_magnitudes = pickle.load(f)  # noqa: S301
         else:
+            logger.info('Building RCDB cache...')
             self.pol_angle_data, self.pol_magnitudes = self._build_from_db()
-            self.PATH.parent.mkdir(parents=True, exist_ok=True)
-            with self.PATH.open('wb') as f:
+            RCDB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with RCDB_PATH.open('wb') as f:
                 pickle.dump(
                     (self.pol_angle_data, self.pol_magnitudes),
                     f,
