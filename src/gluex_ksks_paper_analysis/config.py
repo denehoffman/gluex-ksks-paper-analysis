@@ -508,10 +508,12 @@ class Fit:
         rng = np.random.default_rng(seed)
         best_fits: list[ld.MinimizationSummary] = []
         bootstraps: list[list[ld.MinimizationSummary]] = []
-        for ibin in trange(self.bins, desc='Bins'):
+        for ibin in trange(self.bins, desc='Bins', position=0, leave=True):
             nll_ibin = ld.NLL(model, ds_data_binned[ibin], ds_accmc_binned[ibin])
             best_fit_ibin = None
-            for iiter in trange(self.n_iterations, desc='Iterations'):
+            for iiter in trange(
+                self.n_iterations, desc='Iterations', position=1, leave=False
+            ):
                 p0 = rng.uniform(-100.0, 100.0, len(nll_ibin.parameters))
                 res = nll_ibin.minimize(p0, settings={'skip_hessian': True})
                 res = nll_ibin.minimize(res.x, method='nelder-mead')
@@ -522,7 +524,9 @@ class Fit:
                 raise RuntimeError(msg)
             best_fits.append(best_fit_ibin)
             bootstraps_ibin: list[ld.MinimizationSummary] = []
-            for iboot in trange(self.n_bootstraps, desc='Bootstraps'):
+            for iboot in trange(
+                self.n_bootstraps, desc='Bootstraps', position=1, leave=False
+            ):
                 nll_iboot = ld.NLL(
                     model, ds_data_binned[ibin].bootstrap(iboot), ds_accmc_binned[ibin]
                 )
