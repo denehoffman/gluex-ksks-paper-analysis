@@ -10,6 +10,10 @@ cache = true
 rules = ["reduced_mandelstam_t < 0.5"]
 cache = true
 
+[cuts.mandelstam_very_high_t]
+rules = ["reduced_mandelstam_t < 1.0"]
+cache = true
+
 [weights.accid]
 weight_type = "accidental"
 cache = false
@@ -53,6 +57,10 @@ steps  = ["accid", "standard", "mandelstam_low_t", "splot"]
 source = "data.parquet"
 steps  = ["accid", "standard", "mandelstam_high_t", "splot"]
 
+[datasets.data_very_high_t]
+source = "data.parquet"
+steps  = ["accid", "standard", "mandelstam_very_high_t", "splot"]
+
 [datasets.accmc]
 source = "sigmc.parquet"
 steps  = ["accid", "standard"]
@@ -64,6 +72,10 @@ steps  = ["accid", "standard", "mandelstam_low_t"]
 [datasets.accmc_high_t]
 source = "sigmc.parquet"
 steps  = ["accid", "standard", "mandelstam_high_t"]
+
+[datasets.accmc_very_high_t]
+source = "sigmc.parquet"
+steps  = ["accid", "standard", "mandelstam_very_high_t"]
 
 [fits.spd2p]
 waves = ["S+0+", "D+2+"]
@@ -103,6 +115,18 @@ data = "data_high_t"
 accmc = "accmc_high_t"
 bins = 50
 
+[fits.spd2p_very_high_t]
+waves = ["S+0+", "D+2+"]
+data = "data_very_high_t"
+accmc = "accmc_very_high_t"
+bins = 50
+
+[fits.spnd2p_very_high_t]
+waves = ["S+0+", "S+0-", "D+2+"]
+data = "data_very_high_t"
+accmc = "accmc_very_high_t"
+bins = 50
+
 [variations.default]
 fits = ["spd2p", "spnd2p"]
 plots = [
@@ -122,4 +146,11 @@ fits = ["spd2p_high_t", "spnd2p_high_t"]
 plots = [
   { dataset = "data_high_t",  items = ["mass", "chisqdof", "mandelstam_t"] },
   { dataset = "accmc_high_t", items = ["mass", "mandelstam_t"] }
+]
+
+[variations.very_high_t]
+fits = ["spd2p_very_high_t", "spnd2p_very_high_t"]
+plots = [
+  { dataset = "data_very_high_t",  items = ["mass", "chisqdof", "mandelstam_t"] },
+  { dataset = "accmc_very_high_t", items = ["mass", "mandelstam_t"] }
 ]
