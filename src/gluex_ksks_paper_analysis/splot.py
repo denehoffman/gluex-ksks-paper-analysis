@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import KW_ONLY, dataclass
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable, Callable, Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
+import polars as pl
 from scipy.optimize import minimize
 
 from gluex_ksks_paper_analysis.environment import BLACK, BLUE, GREEN, PURPLE, RED
@@ -169,6 +170,39 @@ class SharedTauExponential2D(ComponentPDF):
 
     def log_penalty(self, _theta: ArrayLike) -> float:
         return 0.0
+
+
+class SharedGaussian2D(ComponentPDF):
+    def __init__(self, *, mu0: float = 0.0, sigma0: float = 0.01):
+        self.mu0 = mu0
+        self.sigma0 = sigma0
+
+    def pdf(self, x: ArrayLike, theta: ArrayLike) -> NDArray:
+        x = np.asarray(x)
+        t1, t2 = x[:, 0], x[:, 1]
+        theta = np.asarray(theta)
+        mu, sigma = float(theta[0]), float(theta[1])
+        g1 = np.exp(-0.5 * ((t1 - mu) / sigma) ** 2) / (sigma * np.sqrt(2 * np.pi))
+        g2 = np.exp(-0.5 * ((t2 - mu) / sigma) ** 2) / (sigma * np.sqrt(2 * np.pi))
+        return g1 * g2
+
+    def pdf1d(self, x: ArrayLike, theta: ArrayLike) -> NDArray:
+        x = np.asarray(x)
+        theta = np.asarray(theta)
+        mu, sigma = float(theta[0]), float(theta[1])
+        return np.exp(-0.5 * ((x - mu) / sigma) ** 2) / (sigma * np.sqrt(2 * np.pi))
+
+    def log_penalty(self, theta: ArrayLike) -> float:
+        return 0.0
+
+    def n_theta(self) -> int:
+        return 2
+
+    def theta_bounds(self) -> list[tuple[float | None, float | None]]:
+        return [(-0.1, 0.1), (0.0001, 20.0)]
+
+    def theta0(self, data: ArrayLike) -> NDArray:
+        return np.array([self.mu0, self.sigma0], dtype=float)
 
 
 def extended_unbinned_nll(
@@ -345,3 +379,22 @@ def fit_mixture(
         v,
         denom,
     )
+
+
+def _construct_stepwise(
+    df_sigmc: pl.LazyFrame, datatype: Literal['sig', 'bkg']
+) -> ComponentPDF:
+    sigmc_data = df_sigmc.select('RFL1', 'RFL2', 'weight').collect()
+    sigmc_t1 = sigmc_data['RFL1'].to_numpy()
+    sigmc_t2 = sigmc_data['RFL2'].to_numpy()
+    sigmc_weights = sigmc_data['weight'].to_numpy()
+    return StepwisePDF2D.from_mc(sigmc_t1, sigmc_t2, sigmc_weights, bins=2000)
+
+
+REGISTRY: dict[str, Callable[[pl.LazyFrame, Literal['sig', 'bkg']], ComponentPDF]] = {
+    'hist': _construct_stepwise,
+    'exp': lambda _, datatype: SharedTauExponential2D(
+        lda0=18.0 if datatype == 'sig' else 110.0
+    ),
+    'gauss': lambda _, datatype: SharedGaussian2D(),
+}

@@ -55,49 +55,44 @@ class Wave:
         return self.r == Reflectivity.Negative
 
     def register(
-        self, m: ld.Manager
+        self,
     ) -> (
         tuple[ld.amplitudes.Expression, ld.amplitudes.Expression]
         | ld.amplitudes.Expression
     ):
-        angles = ld.Angles(0, [1], [2], [2, 3])
+        topology = ld.Topology.missing_k2('beam', ['kshort1', 'kshort2'], 'proton')
+        angles = ld.Angles(topology, 'kshort1')
         if self.r is None:
-            angular_distribution = m.register(
-                ld.Ylm(f'ylm {self}', self.j.to_int(), self.m, angles)
+            angular_distribution = ld.Ylm(
+                f'ylm {self}', self.j.to_int(), self.m, angles
             )
             if self.j == AngularMomentum.S:
-                coeff = m.register(
-                    ld.Scalar(f'coeff {self}', ld.parameter(f'{self} real'))
-                )
+                coeff = ld.Scalar(f'coeff {self}', ld.parameter(f'{self} real'))
             else:
-                coeff = m.register(
-                    ld.ComplexScalar(
-                        f'coeff {self}',
-                        ld.parameter(f'{self} real'),
-                        ld.parameter(f'{self} imag'),
-                    )
-                )
-            return coeff * angular_distribution
-        polarization = ld.Polarization(0, [1], 0)
-        angular_distribution = m.register(
-            ld.Zlm(
-                f'zlm {self}',
-                self.j.to_int(),
-                self.m,
-                str(self.r.value),
-                angles,
-                polarization,
-            )
-        )
-        if self.j == AngularMomentum.S:
-            coeff = m.register(ld.Scalar(f'coeff {self}', ld.parameter(f'{self} real')))
-        else:
-            coeff = m.register(
-                ld.ComplexScalar(
+                coeff = ld.ComplexScalar(
                     f'coeff {self}',
                     ld.parameter(f'{self} real'),
                     ld.parameter(f'{self} imag'),
                 )
+            return coeff * angular_distribution
+        polarization = ld.Polarization(
+            topology, pol_magnitude='pol_magnitude', pol_angle='pol_angle'
+        )
+        angular_distribution = ld.Zlm(
+            f'zlm {self}',
+            self.j.to_int(),
+            self.m,
+            str(self.r.value),
+            angles,
+            polarization,
+        )
+        if self.j == AngularMomentum.S:
+            coeff = ld.Scalar(f'coeff {self}', ld.parameter(f'{self} real'))
+        else:
+            coeff = ld.ComplexScalar(
+                f'coeff {self}',
+                ld.parameter(f'{self} real'),
+                ld.parameter(f'{self} imag'),
             )
         return (
             coeff * angular_distribution.real(),
@@ -109,8 +104,7 @@ class Wave:
         return [f'coeff {self}', f'{"ylm" if self.r is None else "zlm"} {self}']
 
 
-def build_model(waves: list[Wave]) -> ld.Model:
-    m = ld.Manager()
+def build_model(waves: list[Wave]) -> ld.Expression:
     simple_waves = [w for w in waves if w.r is None]
     positive_waves = [w for w in waves if w.positive]
     negative_waves = [w for w in waves if w.negative]
@@ -118,19 +112,19 @@ def build_model(waves: list[Wave]) -> ld.Model:
         if positive_waves or negative_waves:
             msg = 'Cannot have both simple and polarized waves'
             raise ValueError(msg)
-        simple_sum = ld.amplitude_sum([w.register(m) for w in simple_waves])
-        expr = simple_sum.norm_sqr()
-        return m.model(expr)
-    pos_sum = [w.register(m) for w in positive_waves]
-    pos_sum_re = ld.amplitude_sum([w[0] for w in pos_sum])
-    pos_sum_im = ld.amplitude_sum([w[1] for w in pos_sum])
-    neg_sum = [w.register(m) for w in negative_waves]
-    neg_sum_re = ld.amplitude_sum([w[0] for w in neg_sum])
-    neg_sum_im = ld.amplitude_sum([w[1] for w in neg_sum])
-    expr = (
+        terms = [w.register() for w in simple_waves]
+        terms = [t for t in terms if isinstance(t, ld.amplitudes.Expression)]
+        simple_sum = ld.expr_sum(terms)
+        return simple_sum.norm_sqr()
+    pos_sum = [w.register() for w in positive_waves]
+    pos_sum_re = ld.expr_sum([w[0] for w in pos_sum if isinstance(w, tuple)])
+    pos_sum_im = ld.expr_sum([w[1] for w in pos_sum if isinstance(w, tuple)])
+    neg_sum = [w.register() for w in negative_waves]
+    neg_sum_re = ld.expr_sum([w[0] for w in neg_sum if isinstance(w, tuple)])
+    neg_sum_im = ld.expr_sum([w[1] for w in neg_sum if isinstance(w, tuple)])
+    return (
         pos_sum_re.norm_sqr()
         + pos_sum_im.norm_sqr()
         + neg_sum_re.norm_sqr()
         + neg_sum_im.norm_sqr()
     )
-    return m.model(expr)

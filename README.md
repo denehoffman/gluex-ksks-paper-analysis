@@ -133,9 +133,10 @@ fits = ["fit1"]
 #### **Notes**
 
 * Allowed variable names for plotting and cuts are:
-  + `p4_N_M` where `N` is a number indicating the particle (photon=0, recoil proton=1, Ks1=2, Ks2=3, PiPlus1=4, PiMinus1=5, PiPlus2=6, PiMinus2=7) and `M` is `Px`, `Py`, `Pz`, or `E`
-  + `aux_0_x`, `aux_0_y` or `aux_0_z`, which are $`P_\gamma \cos(\Phi)`$ and $`P_\gamma \sin(\Phi)`$ and $`0`$, respectively
+  + `<particle>_{e,px,py,pz}` where `<particle>` can be any of `beam`, `proton`, `kshort1`, `kshort2`, `piplus1`, `piminus1`, `piplus2`, or `piminus2`
   + Any of the following:
+    - `pol_magnitude`
+    - `pol_angle`
     - `ChiSqDOF`
     - `Proton_Z`
     - `is_polarized` ($`0`$ for AMO, $`1`$ for PARA/PERP)

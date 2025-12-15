@@ -667,7 +667,7 @@ class RCDBData:
             return None
         magnitude = pol_hist.counts[energy_index]
         return {
-            'x': float(magnitude * np.cos(angle)),
-            'y': float(magnitude * np.sin(angle)),
+            'pol_magnitude': float(magnitude),
+            'pol_angle': float(angle),
             'is_polarized': 1.0,
         }

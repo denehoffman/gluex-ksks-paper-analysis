@@ -8,39 +8,34 @@ from gluex_ksks_paper_analysis.databases import RCDBData
 
 def add_polarization(data: pl.LazyFrame) -> pl.LazyFrame:
     rcdb_data = RCDBData()
-    return (
-        data.with_columns(
-            pl.struct('RunNumber', 'p4_0_E')
-            .map_elements(
-                lambda s: rcdb_data.get_pol_data(s['RunNumber'], s['p4_0_E'])
-                or {'x': 0.0, 'y': 0.0, 'is_polarized': 0.0},
-                return_dtype=pl.Struct(
-                    {'x': pl.Float64, 'y': pl.Float64, 'is_polarized': pl.Float64}
-                ),
-            )
-            .alias('pol'),
+    return data.with_columns(
+        pl.struct('RunNumber', 'beam_e')
+        .map_elements(
+            lambda s: rcdb_data.get_pol_data(s['RunNumber'], s['beam_e'])
+            or {'pol_magnitude': 0.0, 'pol_angle': 0.0, 'is_polarized': 0.0},
+            return_dtype=pl.Struct(
+                {
+                    'pol_magnitude': pl.Float64,
+                    'pol_angle': pl.Float64,
+                    'is_polarized': pl.Float64,
+                }
+            ),
         )
-        .unnest('pol')
-        .with_columns(
-            aux_0_x=pl.col('x').cast(pl.Float32),
-            aux_0_y=pl.col('y').cast(pl.Float32),
-            aux_0_z=pl.lit(0.0, dtype=pl.Float32),
-        )
-        .drop('x', 'y')
-    )
+        .alias('pol'),
+    ).unnest('pol')
 
 
 def add_m_meson(data: pl.LazyFrame) -> pl.LazyFrame:
     def process(struct) -> float:
-        ks1_px = struct['p4_2_Px']
-        ks1_py = struct['p4_2_Py']
-        ks1_pz = struct['p4_2_Pz']
-        ks1_e = struct['p4_2_E']
+        ks1_px = struct['kshort1_px']
+        ks1_py = struct['kshort1_py']
+        ks1_pz = struct['kshort1_pz']
+        ks1_e = struct['kshort1_e']
 
-        ks2_px = struct['p4_3_Px']
-        ks2_py = struct['p4_3_Py']
-        ks2_pz = struct['p4_3_Pz']
-        ks2_e = struct['p4_3_E']
+        ks2_px = struct['kshort2_px']
+        ks2_py = struct['kshort2_py']
+        ks2_pz = struct['kshort2_pz']
+        ks2_e = struct['kshort2_e']
 
         ks1_lab = ld.Vec4(ks1_px, ks1_py, ks1_pz, ks1_e)
         ks2_lab = ld.Vec4(ks2_px, ks2_py, ks2_pz, ks2_e)
@@ -48,14 +43,14 @@ def add_m_meson(data: pl.LazyFrame) -> pl.LazyFrame:
 
     return data.with_columns(
         pl.struct(
-            'p4_2_Px',
-            'p4_2_Py',
-            'p4_2_Pz',
-            'p4_2_E',
-            'p4_3_Px',
-            'p4_3_Py',
-            'p4_3_Pz',
-            'p4_3_E',
+            'kshort1_px',
+            'kshort1_py',
+            'kshort1_pz',
+            'kshort1_e',
+            'kshort2_px',
+            'kshort2_py',
+            'kshort2_pz',
+            'kshort2_e',
         )
         .map_elements(process, return_dtype=pl.Float64)
         .alias('m_meson')
@@ -64,20 +59,20 @@ def add_m_meson(data: pl.LazyFrame) -> pl.LazyFrame:
 
 def add_ksb_costheta(data: pl.LazyFrame) -> pl.LazyFrame:
     def process(struct) -> float:
-        p_px = struct['p4_1_Px']
-        p_py = struct['p4_1_Py']
-        p_pz = struct['p4_1_Pz']
-        p_e = struct['p4_1_E']
+        p_px = struct['proton_px']
+        p_py = struct['proton_py']
+        p_pz = struct['proton_pz']
+        p_e = struct['proton_e']
 
-        ks1_px = struct['p4_2_Px']
-        ks1_py = struct['p4_2_Py']
-        ks1_pz = struct['p4_2_Pz']
-        ks1_e = struct['p4_2_E']
+        ks1_px = struct['kshort1_px']
+        ks1_py = struct['kshort1_py']
+        ks1_pz = struct['kshort1_pz']
+        ks1_e = struct['kshort1_e']
 
-        ks2_px = struct['p4_3_Px']
-        ks2_py = struct['p4_3_Py']
-        ks2_pz = struct['p4_3_Pz']
-        ks2_e = struct['p4_3_E']
+        ks2_px = struct['kshort2_px']
+        ks2_py = struct['kshort2_py']
+        ks2_pz = struct['kshort2_pz']
+        ks2_e = struct['kshort2_e']
 
         p_lab = ld.Vec4(p_px, p_py, p_pz, p_e)
         ks1_lab = ld.Vec4(ks1_px, ks1_py, ks1_pz, ks1_e)
@@ -89,18 +84,18 @@ def add_ksb_costheta(data: pl.LazyFrame) -> pl.LazyFrame:
 
     return data.with_columns(
         pl.struct(
-            'p4_1_Px',
-            'p4_1_Py',
-            'p4_1_Pz',
-            'p4_1_E',
-            'p4_2_Px',
-            'p4_2_Py',
-            'p4_2_Pz',
-            'p4_2_E',
-            'p4_3_Px',
-            'p4_3_Py',
-            'p4_3_Pz',
-            'p4_3_E',
+            'proton_px',
+            'proton_py',
+            'proton_pz',
+            'proton_e',
+            'kshort1_px',
+            'kshort1_py',
+            'kshort1_pz',
+            'kshort1_e',
+            'kshort2_px',
+            'kshort2_py',
+            'kshort2_pz',
+            'kshort2_e',
         )
         .map_elements(process, return_dtype=pl.Float64)
         .alias('ksb_costheta')
@@ -109,20 +104,20 @@ def add_ksb_costheta(data: pl.LazyFrame) -> pl.LazyFrame:
 
 def add_m_baryon(data: pl.LazyFrame) -> pl.LazyFrame:
     def process(struct) -> float:
-        p_px = struct['p4_1_Px']
-        p_py = struct['p4_1_Py']
-        p_pz = struct['p4_1_Pz']
-        p_e = struct['p4_1_E']
+        p_px = struct['proton_px']
+        p_py = struct['proton_py']
+        p_pz = struct['proton_pz']
+        p_e = struct['proton_e']
 
-        ks1_px = struct['p4_2_Px']
-        ks1_py = struct['p4_2_Py']
-        ks1_pz = struct['p4_2_Pz']
-        ks1_e = struct['p4_2_E']
+        ks1_px = struct['kshort1_px']
+        ks1_py = struct['kshort1_py']
+        ks1_pz = struct['kshort1_pz']
+        ks1_e = struct['kshort1_e']
 
-        ks2_px = struct['p4_3_Px']
-        ks2_py = struct['p4_3_Py']
-        ks2_pz = struct['p4_3_Pz']
-        ks2_e = struct['p4_3_E']
+        ks2_px = struct['kshort2_px']
+        ks2_py = struct['kshort2_py']
+        ks2_pz = struct['kshort2_pz']
+        ks2_e = struct['kshort2_e']
 
         p_lab = ld.Vec4(p_px, p_py, p_pz, p_e)
         ks1_lab = ld.Vec4(ks1_px, ks1_py, ks1_pz, ks1_e)
@@ -135,18 +130,18 @@ def add_m_baryon(data: pl.LazyFrame) -> pl.LazyFrame:
 
     return data.with_columns(
         pl.struct(
-            'p4_1_Px',
-            'p4_1_Py',
-            'p4_1_Pz',
-            'p4_1_E',
-            'p4_2_Px',
-            'p4_2_Py',
-            'p4_2_Pz',
-            'p4_2_E',
-            'p4_3_Px',
-            'p4_3_Py',
-            'p4_3_Pz',
-            'p4_3_E',
+            'proton_px',
+            'proton_py',
+            'proton_pz',
+            'proton_e',
+            'kshort1_px',
+            'kshort1_py',
+            'kshort1_pz',
+            'kshort1_e',
+            'kshort2_px',
+            'kshort2_py',
+            'kshort2_pz',
+            'kshort2_e',
         )
         .map_elements(process, return_dtype=pl.Float64)
         .alias('m_baryon')
@@ -155,25 +150,25 @@ def add_m_baryon(data: pl.LazyFrame) -> pl.LazyFrame:
 
 def add_hx_angles(data: pl.LazyFrame) -> pl.LazyFrame:
     def process(struct) -> dict[str, float]:
-        beam_px = struct['p4_0_Px']
-        beam_py = struct['p4_0_Py']
-        beam_pz = struct['p4_0_Pz']
-        beam_e = struct['p4_0_E']
+        beam_px = struct['beam_px']
+        beam_py = struct['beam_py']
+        beam_pz = struct['beam_pz']
+        beam_e = struct['beam_e']
 
-        p_px = struct['p4_1_Px']
-        p_py = struct['p4_1_Py']
-        p_pz = struct['p4_1_Pz']
-        p_e = struct['p4_1_E']
+        p_px = struct['proton_px']
+        p_py = struct['proton_py']
+        p_pz = struct['proton_pz']
+        p_e = struct['proton_e']
 
-        ks1_px = struct['p4_2_Px']
-        ks1_py = struct['p4_2_Py']
-        ks1_pz = struct['p4_2_Pz']
-        ks1_e = struct['p4_2_E']
+        ks1_px = struct['kshort1_px']
+        ks1_py = struct['kshort1_py']
+        ks1_pz = struct['kshort1_pz']
+        ks1_e = struct['kshort1_e']
 
-        ks2_px = struct['p4_3_Px']
-        ks2_py = struct['p4_3_Py']
-        ks2_pz = struct['p4_3_Pz']
-        ks2_e = struct['p4_3_E']
+        ks2_px = struct['kshort2_px']
+        ks2_py = struct['kshort2_py']
+        ks2_pz = struct['kshort2_pz']
+        ks2_e = struct['kshort2_e']
 
         beam_lab = ld.Vec4(beam_px, beam_py, beam_pz, beam_e)
         p_lab = ld.Vec4(p_px, p_py, p_pz, p_e)
@@ -184,8 +179,15 @@ def add_hx_angles(data: pl.LazyFrame) -> pl.LazyFrame:
         p_com = p_lab.boost(-com_boost.beta)
         ks1_com = ks1_lab.boost(-com_boost.beta)
         ks2_com = ks2_lab.boost(-com_boost.beta)
-        event = ld.Event(p4s=[beam_com, p_com, ks1_com, ks2_com], aux=[], weight=1.0)
-        angles_hx = ld.Angles(0, [1], [2], [2, 3], 'HX')
+        event = ld.Event(
+            p4s=[beam_com, p_com, ks1_com, ks2_com],
+            aux=[],
+            weight=1.0,
+            p4_names=['beam', 'proton', 'kshort1', 'kshort2'],
+            aliases={'resonance': ['kshort1', 'kshort2']},
+        )
+        topology = ld.Topology.missing_k2('beam', 'resonance', 'proton')
+        angles_hx = ld.Angles(topology, 'kshort1', 'HX')
         return {
             'hx_costheta': angles_hx.costheta.value(event),
             'hx_phi': angles_hx.phi.value(event),
@@ -193,22 +195,22 @@ def add_hx_angles(data: pl.LazyFrame) -> pl.LazyFrame:
 
     return data.with_columns(
         pl.struct(
-            'p4_0_Px',
-            'p4_0_Py',
-            'p4_0_Pz',
-            'p4_0_E',
-            'p4_1_Px',
-            'p4_1_Py',
-            'p4_1_Pz',
-            'p4_1_E',
-            'p4_2_Px',
-            'p4_2_Py',
-            'p4_2_Pz',
-            'p4_2_E',
-            'p4_3_Px',
-            'p4_3_Py',
-            'p4_3_Pz',
-            'p4_3_E',
+            'beam_px',
+            'beam_py',
+            'beam_pz',
+            'beam_e',
+            'proton_px',
+            'proton_py',
+            'proton_pz',
+            'proton_e',
+            'kshort1_px',
+            'kshort1_py',
+            'kshort1_pz',
+            'kshort1_e',
+            'kshort2_px',
+            'kshort2_py',
+            'kshort2_pz',
+            'kshort2_e',
         )
         .map_elements(
             process,
@@ -226,36 +228,41 @@ def add_hx_angles(data: pl.LazyFrame) -> pl.LazyFrame:
 def add_mandelstam_t(data: pl.LazyFrame) -> pl.LazyFrame:
     # NOTE: these add -t and -t', not t and t'
     def process(struct) -> dict[str, float]:
-        beam_px = struct['p4_0_Px']
-        beam_py = struct['p4_0_Py']
-        beam_pz = struct['p4_0_Pz']
-        beam_e = struct['p4_0_E']
+        beam_px = struct['beam_px']
+        beam_py = struct['beam_py']
+        beam_pz = struct['beam_pz']
+        beam_e = struct['beam_e']
 
-        p_px = struct['p4_1_Px']
-        p_py = struct['p4_1_Py']
-        p_pz = struct['p4_1_Pz']
-        p_e = struct['p4_1_E']
+        p_px = struct['proton_px']
+        p_py = struct['proton_py']
+        p_pz = struct['proton_pz']
+        p_e = struct['proton_e']
 
-        ks1_px = struct['p4_2_Px']
-        ks1_py = struct['p4_2_Py']
-        ks1_pz = struct['p4_2_Pz']
-        ks1_e = struct['p4_2_E']
+        ks1_px = struct['kshort1_px']
+        ks1_py = struct['kshort1_py']
+        ks1_pz = struct['kshort1_pz']
+        ks1_e = struct['kshort1_e']
 
-        ks2_px = struct['p4_3_Px']
-        ks2_py = struct['p4_3_Py']
-        ks2_pz = struct['p4_3_Pz']
-        ks2_e = struct['p4_3_E']
+        ks2_px = struct['kshort2_px']
+        ks2_py = struct['kshort2_py']
+        ks2_pz = struct['kshort2_pz']
+        ks2_e = struct['kshort2_e']
 
         beam_lab = ld.Vec4(beam_px, beam_py, beam_pz, beam_e)
         p_lab = ld.Vec4(p_px, p_py, p_pz, p_e)
         ks1_lab = ld.Vec4(ks1_px, ks1_py, ks1_pz, ks1_e)
         ks2_lab = ld.Vec4(ks2_px, ks2_py, ks2_pz, ks2_e)
         event = ld.Event(
-            p4s=[beam_lab, p_lab, ks1_lab, ks2_lab], aux=[], weight=1.0
-        ).boost_to_rest_frame_of([1, 2, 3])
-        mandelstam_t_var = ld.Mandelstam([0], [], [2, 3], [1], channel='t')
-        resonance_com = event.get_p4_sum([2, 3])
-        beam_com = event.p4s[0]
+            p4s=[beam_lab, p_lab, ks1_lab, ks2_lab],
+            aux=[],
+            weight=1.0,
+            p4_names=['beam', 'proton', 'kshort1', 'kshort2'],
+            aliases={'resonance': ['kshort1', 'kshort2']},
+        )
+        topology = ld.Topology.missing_k2('beam', 'resonance', 'proton')
+        mandelstam_t_var = ld.Mandelstam(topology, channel='t')
+        resonance_com = topology.k3_com(event)
+        beam_com = topology.k1_com(event)
         resonance_com_min = ld.Vec4(
             beam_com.vec3.x / beam_com.vec3.mag * resonance_com.vec3.mag,
             beam_com.vec3.y / beam_com.vec3.mag * resonance_com.vec3.mag,
@@ -271,22 +278,22 @@ def add_mandelstam_t(data: pl.LazyFrame) -> pl.LazyFrame:
 
     return data.with_columns(
         pl.struct(
-            'p4_0_Px',
-            'p4_0_Py',
-            'p4_0_Pz',
-            'p4_0_E',
-            'p4_1_Px',
-            'p4_1_Py',
-            'p4_1_Pz',
-            'p4_1_E',
-            'p4_2_Px',
-            'p4_2_Py',
-            'p4_2_Pz',
-            'p4_2_E',
-            'p4_3_Px',
-            'p4_3_Py',
-            'p4_3_Pz',
-            'p4_3_E',
+            'beam_px',
+            'beam_py',
+            'beam_pz',
+            'beam_e',
+            'proton_px',
+            'proton_py',
+            'proton_pz',
+            'proton_e',
+            'kshort1_px',
+            'kshort1_py',
+            'kshort1_pz',
+            'kshort1_e',
+            'kshort2_px',
+            'kshort2_py',
+            'kshort2_pz',
+            'kshort2_e',
         )
         .map_elements(
             process,
@@ -303,30 +310,30 @@ def add_mandelstam_t(data: pl.LazyFrame) -> pl.LazyFrame:
 
 def add_alt_hypos(data: pl.LazyFrame) -> pl.LazyFrame:
     def process(struct) -> dict[str, float]:
-        p_px = struct['p4_1_Px']
-        p_py = struct['p4_1_Py']
-        p_pz = struct['p4_1_Pz']
-        p_e = struct['p4_1_E']
+        p_px = struct['proton_px']
+        p_py = struct['proton_py']
+        p_pz = struct['proton_pz']
+        p_e = struct['proton_e']
 
-        piplus1_px = struct['p4_4_Px']
-        piplus1_py = struct['p4_4_Py']
-        piplus1_pz = struct['p4_4_Pz']
-        piplus1_e = struct['p4_4_E']
+        piplus1_px = struct['piplus1_px']
+        piplus1_py = struct['piplus1_py']
+        piplus1_pz = struct['piplus1_pz']
+        piplus1_e = struct['piplus1_e']
 
-        piminus1_px = struct['p4_5_Px']
-        piminus1_py = struct['p4_5_Py']
-        piminus1_pz = struct['p4_5_Pz']
-        piminus1_e = struct['p4_5_E']
+        piminus1_px = struct['piminus1_px']
+        piminus1_py = struct['piminus1_py']
+        piminus1_pz = struct['piminus1_pz']
+        piminus1_e = struct['piminus1_e']
 
-        piplus2_px = struct['p4_6_Px']
-        piplus2_py = struct['p4_6_Py']
-        piplus2_pz = struct['p4_6_Pz']
-        piplus2_e = struct['p4_6_E']
+        piplus2_px = struct['piplus2_px']
+        piplus2_py = struct['piplus2_py']
+        piplus2_pz = struct['piplus2_pz']
+        piplus2_e = struct['piplus2_e']
 
-        piminus2_px = struct['p4_7_Px']
-        piminus2_py = struct['p4_7_Py']
-        piminus2_pz = struct['p4_7_Pz']
-        piminus2_e = struct['p4_7_E']
+        piminus2_px = struct['piminus2_px']
+        piminus2_py = struct['piminus2_py']
+        piminus2_pz = struct['piminus2_pz']
+        piminus2_e = struct['piminus2_e']
 
         p_lab = ld.Vec4(p_px, p_py, p_pz, p_e)
         piplus1_lab = ld.Vec4(piplus1_px, piplus1_py, piplus1_pz, piplus1_e)
@@ -355,26 +362,26 @@ def add_alt_hypos(data: pl.LazyFrame) -> pl.LazyFrame:
 
     return data.with_columns(
         pl.struct(
-            'p4_1_Px',
-            'p4_1_Py',
-            'p4_1_Pz',
-            'p4_1_E',
-            'p4_4_Px',
-            'p4_4_Py',
-            'p4_4_Pz',
-            'p4_4_E',
-            'p4_5_Px',
-            'p4_5_Py',
-            'p4_5_Pz',
-            'p4_5_E',
-            'p4_6_Px',
-            'p4_6_Py',
-            'p4_6_Pz',
-            'p4_6_E',
-            'p4_7_Px',
-            'p4_7_Py',
-            'p4_7_Pz',
-            'p4_7_E',
+            'proton_px',
+            'proton_py',
+            'proton_pz',
+            'proton_e',
+            'piplus1_px',
+            'piplus1_py',
+            'piplus1_pz',
+            'piplus1_e',
+            'piminus1_px',
+            'piminus1_py',
+            'piminus1_pz',
+            'piminus1_e',
+            'piplus2_px',
+            'piplus2_py',
+            'piplus2_pz',
+            'piplus2_e',
+            'piminus2_px',
+            'piminus2_py',
+            'piminus2_pz',
+            'piminus2_e',
         )
         .map_elements(
             process,
@@ -405,9 +412,8 @@ def add_alt_hypos(data: pl.LazyFrame) -> pl.LazyFrame:
 
 
 VARIABLE_MAPPINGS: dict[str, Callable[[pl.LazyFrame], pl.LazyFrame]] = {
-    'aux_0_x': add_polarization,
-    'aux_0_y': add_polarization,
-    'aux_0_z': add_polarization,
+    'pol_magnitude': add_polarization,
+    'pol_angle': add_polarization,
     'is_polarized': add_polarization,
     'polarization': add_polarization,
     'm_meson': add_m_meson,

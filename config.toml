@@ -24,6 +24,18 @@ sig = "hist"
 bkg = "exp"
 cache = true
 
+[weights.splot_double_hist]
+weight_type = "splot"
+sig = "hist"
+bkg = "hist"
+cache = true
+
+[weights.splot_gauss]
+weight_type = "splot"
+sig = "hist"
+bkg = "gauss"
+cache = true
+
 [plots.mass]
 variable = "m_meson"
 label = "$m(K_S^0K_S^0)$"
@@ -48,6 +60,14 @@ limits = [0.0, 1.5]
 [datasets.data]
 source = "data.parquet"
 steps  = ["accid", "standard", "splot"]
+
+[datasets.data_double_hist]
+source = "data.parquet"
+steps  = ["accid", "standard", "splot_double_hist"]
+
+[datasets.data_gauss]
+source = "data.parquet"
+steps  = ["accid", "standard", "splot_gauss"]
 
 [datasets.data_low_t]
 source = "data.parquet"
@@ -88,6 +108,20 @@ n_bootstraps=10
 [fits.spnd2p]
 waves = ["S+0+", "S+0-", "D+2+"]
 data = "data"
+accmc = "accmc"
+bins = 50
+
+[fits.spd2p_double_hist]
+waves = ["S+0+", "D+2+"]
+data = "data_double_hist"
+accmc = "accmc"
+bins = 50
+n_iterations=10
+n_bootstraps=10
+
+[fits.spnd2p_double_hist]
+waves = ["S+0+", "S+0-", "D+2+"]
+data = "data_double_hist"
 accmc = "accmc"
 bins = 50
 
@@ -134,6 +168,13 @@ plots = [
   { dataset = "accmc", items = ["mass", "mandelstam_t"] }
 ]
 
+[variations.double_hist]
+fits = ["spd2p_double_hist", "spnd2p_double_hist"]
+plots = [
+  { dataset = "data_double_hist",  items = ["mass", "chisqdof", "mandelstam_t"] },
+  { dataset = "accmc", items = ["mass", "mandelstam_t"] }
+]
+
 [variations.low_t]
 fits = ["spd2p_low_t", "spnd2p_low_t"]
 plots = [
@@ -153,4 +194,10 @@ fits = ["spd2p_very_high_t", "spnd2p_very_high_t"]
 plots = [
   { dataset = "data_very_high_t",  items = ["mass", "chisqdof", "mandelstam_t"] },
   { dataset = "accmc_very_high_t", items = ["mass", "mandelstam_t"] }
+]
+
+[variations.gauss]
+fits = []
+plots = [
+  { dataset = "data_gauss", items = ["mass", "chisqdof", "mandelstam_t"] }
 ]

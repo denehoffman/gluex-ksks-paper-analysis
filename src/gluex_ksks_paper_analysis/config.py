@@ -39,8 +39,7 @@ from gluex_ksks_paper_analysis.fit import (
     build_model,
 )
 from gluex_ksks_paper_analysis.splot import (
-    SharedTauExponential2D,
-    StepwisePDF2D,
+    REGISTRY,
     fit_mixture,
 )
 from gluex_ksks_paper_analysis.utilities import Histogram
@@ -72,38 +71,38 @@ _BASE_COLUMNS: list[str] = [
     'RunNumber',
     'EventNumber',
     'weight',
-    'p4_0_E',
-    'p4_0_Px',
-    'p4_0_Py',
-    'p4_0_Pz',
-    'p4_1_E',
-    'p4_1_Px',
-    'p4_1_Py',
-    'p4_1_Pz',
-    'p4_2_E',
-    'p4_2_Px',
-    'p4_2_Py',
-    'p4_2_Pz',
-    'p4_3_E',
-    'p4_3_Px',
-    'p4_3_Py',
-    'p4_3_Pz',
-    'p4_4_E',
-    'p4_4_Px',
-    'p4_4_Py',
-    'p4_4_Pz',
-    'p4_5_E',
-    'p4_5_Px',
-    'p4_5_Py',
-    'p4_5_Pz',
-    'p4_6_E',
-    'p4_6_Px',
-    'p4_6_Py',
-    'p4_6_Pz',
-    'p4_7_E',
-    'p4_7_Px',
-    'p4_7_Py',
-    'p4_7_Pz',
+    'beam_e',
+    'beam_px',
+    'beam_py',
+    'beam_pz',
+    'proton_e',
+    'proton_px',
+    'proton_py',
+    'proton_pz',
+    'kshort1_e',
+    'kshort1_px',
+    'kshort1_py',
+    'kshort1_pz',
+    'kshort2_e',
+    'kshort2_px',
+    'kshort2_py',
+    'kshort2_pz',
+    'piplus1_e',
+    'piplus1_px',
+    'piplus1_py',
+    'piplus1_pz',
+    'piminus1_e',
+    'piminus1_px',
+    'piminus1_py',
+    'piminus1_pz',
+    'piplus2_e',
+    'piplus2_px',
+    'piplus2_py',
+    'piplus2_pz',
+    'piminus2_e',
+    'piminus2_px',
+    'piminus2_py',
+    'piminus2_pz',
     'RFL1',
     'RFL2',
     'ChiSqDOF',
@@ -167,34 +166,16 @@ class Weight:
                     df, ccdb=ccdb, polarized_runs=polarized_runs, is_mc=is_mc
                 )
             case 'splot':
-                if self.sig == 'hist':
-                    sigmc_data = df_sigmc.select('RFL1', 'RFL2', 'weight').collect()
-                    sigmc_t1 = sigmc_data['RFL1'].to_numpy()
-                    sigmc_t2 = sigmc_data['RFL2'].to_numpy()
-                    sigmc_weights = sigmc_data['weight'].to_numpy()
-                    signal = StepwisePDF2D.from_mc(
-                        sigmc_t1, sigmc_t2, sigmc_weights, bins=2000
-                    )
-                elif self.sig == 'exp':
-                    # TODO: get the right value
-                    signal = SharedTauExponential2D(lda0=18.0)
-                else:
+                sig_fn = REGISTRY.get(self.sig)
+                if sig_fn is None:
                     msg = f'Unsupported sig {self.sig}'
                     raise ConfigError(msg)
-
-                if self.bkg == 'hist':
-                    bkgmc_data = df_bkgmc.select('RFL1', 'RFL2', 'weight').collect()
-                    bkgmc_t1 = bkgmc_data['RFL1'].to_numpy()
-                    bkgmc_t2 = bkgmc_data['RFL2'].to_numpy()
-                    bkgmc_weights = bkgmc_data['weight'].to_numpy()
-                    background = StepwisePDF2D.from_mc(
-                        bkgmc_t1, bkgmc_t2, bkgmc_weights, bins=2000
-                    )
-                elif self.bkg == 'exp':
-                    background = SharedTauExponential2D(lda0=110.0)
-                else:
+                signal = sig_fn(df_sigmc, 'sig')
+                bkg_fn = REGISTRY.get(self.bkg)
+                if bkg_fn is None:
                     msg = f'Unsupported bkg {self.bkg}'
                     raise ConfigError(msg)
+                background = bkg_fn(df_bkgmc, 'bkg')
                 return Weight.set_splot_weights(
                     df, signal=signal, background=background
                 )
@@ -212,11 +193,11 @@ class Weight:
             .group_by(['RunNumber', 'EventNumber'])
             .first()
             .with_columns(
-                pl.struct('RunNumber', 'p4_0_E', 'RF', 'weight')
+                pl.struct('RunNumber', 'beam_e', 'RF', 'weight')
                 .map_elements(
                     lambda s: s['weight']
                     * ccdb.get_accidental_weight(
-                        s['RunNumber'], s['p4_0_E'], s['RF'], is_mc=is_mc
+                        s['RunNumber'], s['beam_e'], s['RF'], is_mc=is_mc
                     ),
                     return_dtype=pl.Float64,
                 )
@@ -236,8 +217,8 @@ class Weight:
         rfls = data[['RFL1', 'RFL2']].to_numpy()
         weights = data['weight'].to_numpy()
         fit_result = fit_mixture(rfls, weights, signal, background, p0_yields=None)
-        # TODO: make plots and safe fit result
-        # fit_result.plot_projection(rfls, weights)
+        # TODO: make plots and save fit result
+        fit_result.plot_projection(rfls, weights)
         sweights = fit_result.get_sweights(rfls)
         new_weights = weights * sweights
         weights_df = pl.DataFrame(
@@ -333,8 +314,8 @@ class Plot2D:
         df = add_variable(hist_plot_x.variable, df)
         df = add_variable(hist_plot_y.variable, df)
         df = df.select([hist_plot_x.variable, hist_plot_y.variable, 'weight']).collect()
-        data_x = df[self.hist_plot_x.variable].to_numpy()
-        data_y = df[self.hist_plot_y.variable].to_numpy()
+        data_x = df[hist_plot_x.variable].to_numpy()
+        data_y = df[hist_plot_y.variable].to_numpy()
         weights = df['weight'].to_numpy()
         ax.hist2d(
             data_x,
@@ -426,25 +407,24 @@ class Fit:
     n_bootstraps: int = 100
     required_columns: list[str] = field(
         default_factory=lambda: [
-            'p4_0_E',
-            'p4_0_Px',
-            'p4_0_Py',
-            'p4_0_Pz',
-            'p4_1_E',
-            'p4_1_Px',
-            'p4_1_Py',
-            'p4_1_Pz',
-            'p4_2_E',
-            'p4_2_Px',
-            'p4_2_Py',
-            'p4_2_Pz',
-            'p4_3_E',
-            'p4_3_Px',
-            'p4_3_Py',
-            'p4_3_Pz',
-            'aux_0_x',
-            'aux_0_y',
-            'aux_0_z',
+            'beam_e',
+            'beam_px',
+            'beam_py',
+            'beam_pz',
+            'proton_e',
+            'proton_px',
+            'proton_py',
+            'proton_pz',
+            'kshort1_e',
+            'kshort1_px',
+            'kshort1_py',
+            'kshort1_pz',
+            'kshort2_e',
+            'kshort2_px',
+            'kshort2_py',
+            'kshort2_pz',
+            'pol_magnitude',
+            'pol_angle',
             'weight',
         ]
     )
@@ -494,15 +474,13 @@ class Fit:
         df_accmc = add_variable('polarization', df_accmc)
         ds_data = ld.Dataset.from_polars(
             df_data.select(self.required_columns).collect(),
-            rest_frame_indices=[1, 2, 3],
         )
         ds_accmc = ld.Dataset.from_polars(
             df_accmc.select(self.required_columns).collect(),
-            rest_frame_indices=[1, 2, 3],
         )
         waves = [Wave(w) for w in self.waves]
         model = build_model(waves)
-        mass = ld.Mass([2, 3])
+        mass = ld.Mass(['kshort1', 'kshort2'])
         ds_data_binned = ds_data.bin_by(mass, self.bins, self.limits)
         ds_accmc_binned = ds_accmc.bin_by(mass, self.bins, self.limits)
         rng = np.random.default_rng(seed)
@@ -545,7 +523,6 @@ class Fit:
             df_genmc = add_variable('polarization', df_genmc)
             ds_genmc = ld.Dataset.from_polars(
                 df_genmc.select(self.required_columns).collect(),
-                rest_frame_indices=[1, 2, 3],
             )
             ds_genmc_binned = ds_genmc.bin_by(mass, self.bins, self.limits)
         else:
