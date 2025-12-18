@@ -3,21 +3,20 @@ from typing import Callable
 import laddu as ld
 import polars as pl
 
-from gluex_ksks_paper_analysis.databases import RCDBData
+from gluex_ksks_paper_analysis.databases import PolarizationData
 
 
 def add_polarization(data: pl.LazyFrame) -> pl.LazyFrame:
-    rcdb_data = RCDBData()
+    rcdb_data = PolarizationData()
     return data.with_columns(
         pl.struct('RunNumber', 'beam_e')
         .map_elements(
             lambda s: rcdb_data.get_pol_data(s['RunNumber'], s['beam_e'])
-            or {'pol_magnitude': 0.0, 'pol_angle': 0.0, 'is_polarized': 0.0},
+            or {'pol_magnitude': 0.0, 'pol_angle': 0.0},
             return_dtype=pl.Struct(
                 {
                     'pol_magnitude': pl.Float64,
                     'pol_angle': pl.Float64,
-                    'is_polarized': pl.Float64,
                 }
             ),
         )
@@ -414,7 +413,6 @@ def add_alt_hypos(data: pl.LazyFrame) -> pl.LazyFrame:
 VARIABLE_MAPPINGS: dict[str, Callable[[pl.LazyFrame], pl.LazyFrame]] = {
     'pol_magnitude': add_polarization,
     'pol_angle': add_polarization,
-    'is_polarized': add_polarization,
     'polarization': add_polarization,
     'm_meson': add_m_meson,
     'ksb_costheta': add_ksb_costheta,

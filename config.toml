@@ -1,5 +1,5 @@
 [cuts.standard]
-rules = ["ChiSqDOF >= 3.0", "is_polarized < 1.0", "Proton_Z <= 50.0", "Proton_Z >= 80.0", "m_meson >= 2.0", "ksb_costheta < 0.0"]
+rules = ["ChiSqDOF >= 3.0", "Proton_Z <= 50.0", "Proton_Z >= 80.0", "m_meson >= 2.0", "ksb_costheta < 0.0"]
 cache = true
 
 [cuts.mandelstam_low_t]

@@ -54,13 +54,19 @@ class Wave:
             return False
         return self.r == Reflectivity.Negative
 
-    def register(
+    @property
+    def expression(
         self,
     ) -> (
         tuple[ld.amplitudes.Expression, ld.amplitudes.Expression]
         | ld.amplitudes.Expression
     ):
         topology = ld.Topology.missing_k2('beam', ['kshort1', 'kshort2'], 'proton')
+        mandelstam = ld.Mandelstam(topology, 't')
+        recoil_mass = ld.Mass('proton')
+        daughter_1_mass = ld.Mass('kshort1')
+        daughter_2_mass = ld.Mass('kshort2')
+        resonance_mass = ld.Mass(['kshort1', 'kshort2'])
         angles = ld.Angles(topology, 'kshort1')
         if self.r is None:
             angular_distribution = ld.Ylm(
@@ -94,9 +100,17 @@ class Wave:
                 ld.parameter(f'{self} real'),
                 ld.parameter(f'{self} imag'),
             )
+        kappa = ld.PhaseSpaceFactor(
+            'kappa',
+            recoil_mass,
+            daughter_1_mass,
+            daughter_2_mass,
+            resonance_mass,
+            mandelstam,
+        )
         return (
-            coeff * angular_distribution.real(),
-            coeff * angular_distribution.imag(),
+            coeff * angular_distribution.real() * kappa,
+            coeff * angular_distribution.imag() * kappa,
         )
 
     @property
@@ -112,14 +126,14 @@ def build_model(waves: list[Wave]) -> ld.Expression:
         if positive_waves or negative_waves:
             msg = 'Cannot have both simple and polarized waves'
             raise ValueError(msg)
-        terms = [w.register() for w in simple_waves]
+        terms = [w.expression for w in simple_waves]
         terms = [t for t in terms if isinstance(t, ld.amplitudes.Expression)]
         simple_sum = ld.expr_sum(terms)
         return simple_sum.norm_sqr()
-    pos_sum = [w.register() for w in positive_waves]
+    pos_sum = [w.expression for w in positive_waves]
     pos_sum_re = ld.expr_sum([w[0] for w in pos_sum if isinstance(w, tuple)])
     pos_sum_im = ld.expr_sum([w[1] for w in pos_sum if isinstance(w, tuple)])
-    neg_sum = [w.register() for w in negative_waves]
+    neg_sum = [w.expression for w in negative_waves]
     neg_sum_re = ld.expr_sum([w[0] for w in neg_sum if isinstance(w, tuple)])
     neg_sum_im = ld.expr_sum([w[1] for w in neg_sum if isinstance(w, tuple)])
     return (

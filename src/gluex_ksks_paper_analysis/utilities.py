@@ -20,13 +20,19 @@ class Histogram:
     def __init__(
         self, counts: ArrayLike, edges: ArrayLike, errors: ArrayLike | None = None
     ):
-        self.counts = counts
-        self.edges = edges
-        self.errors = errors if errors is not None else np.sqrt(np.abs(counts))
+        self.counts: NDArray = np.asarray(counts)
+        self.edges: NDArray = np.asarray(edges)
+        self.errors: NDArray = (
+            np.asarray(errors) if errors is not None else np.sqrt(np.abs(self.counts))
+        )
 
     @property
     def bins(self) -> int:
         return len(self.edges) - 1
+
+    @property
+    def limits(self) -> tuple[float, float]:
+        return self.edges[0], self.edges[-1]
 
     @property
     def bin_width(self) -> float:
@@ -49,6 +55,13 @@ class Histogram:
         errors = np.zeros(bins)
         return Histogram(counts, edges, errors)
 
+    @staticmethod
+    def empty_like(h: Histogram) -> Histogram:
+        edges = np.histogram_bin_edges([], bins=h.bins, range=h.limits)
+        counts = np.zeros(h.bins)
+        errors = np.zeros(h.bins)
+        return Histogram(counts, edges, errors)
+
     def plot(self, *, variable_label: str, unit_label: str, **kwargs) -> Figure:
         plt.style.use('gluex_ksks_paper_analysis.style')
         fig, ax = plt.subplots()
@@ -62,6 +75,81 @@ class Histogram:
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         return fig
+
+    def __add__(self, other: Histogram) -> Histogram:
+        assert self.edges == other.edges
+        out = Histogram.empty_like(self)
+        out.counts = self.counts + other.counts
+        out.errors = np.sqrt(np.power(self.errors, 2) + np.power(other.errors, 2))
+        return out
+
+    def __iadd__(self, other: Histogram):
+        out = self + other
+        self.counts = out.counts
+        self.edges = out.edges
+        self.errors = out.errors
+
+    def __mul__(self, other: Histogram) -> Histogram:
+        assert self.edges == other.edges
+        out = Histogram.empty_like(self)
+        out.counts = self.counts * other.counts
+        out.errors = out.counts * np.sqrt(
+            np.power(self.errors / self.counts, 2)
+            + np.power(other.errors / other.counts, 2)
+        )
+        return out
+
+    def __imul__(self, other: Histogram):
+        out = self * other
+        self.counts = out.counts
+        self.edges = out.edges
+        self.errors = out.errors
+
+    def __truediv__(self, other: Histogram) -> Histogram:
+        assert self.edges == other.edges
+        out = Histogram.empty_like(self)
+        out.counts = self.counts / other.counts
+        out.errors = out.counts * np.sqrt(
+            np.power(self.errors / self.counts, 2)
+            + np.power(other.errors / other.counts, 2)
+        )
+        return out
+
+    def __itruediv__(self, other: Histogram):
+        out = self / other
+        self.counts = out.counts
+        self.edges = out.edges
+        self.errors = out.errors
+
+    def scalar_add(self, value: float, error: float = 0.0) -> Histogram:
+        out = Histogram.empty_like(self)
+        out.counts = self.counts + value
+        out.errors = np.sqrt(np.power(self.errors, 2) + np.power(error, 2))
+        return out
+
+    def scalar_mul(self, value: float, error: float = 0.0) -> Histogram:
+        out = Histogram.empty_like(self)
+        out.counts = self.counts * value
+        out.errors = out.counts * np.sqrt(
+            np.power(self.errors / self.counts, 2) + np.power(error / value, 2)
+        )
+        return out
+
+    def scalar_div(self, value: float, error: float = 0.0) -> Histogram:
+        out = Histogram.empty_like(self)
+        out.counts = self.counts / value
+        out.errors = out.counts * np.sqrt(
+            np.power(self.errors / self.counts, 2) + np.power(error / value, 2)
+        )
+        return out
+
+    @staticmethod
+    def sum(histograms: list[Histogram]) -> Histogram:
+        assert len(histograms) > 0
+        out = Histogram.empty_like(histograms[0])
+        for histogram in histograms:
+            out += histogram
+        return out
 
 
 def merge_cli() -> None:

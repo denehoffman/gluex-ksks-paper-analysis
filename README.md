@@ -139,7 +139,6 @@ fits = ["fit1"]
     - `pol_angle`
     - `ChiSqDOF`
     - `Proton_Z`
-    - `is_polarized` ($`0`$ for AMO, $`1`$ for PARA/PERP)
     - `m_meson`
     - `ksb_costheta`
     - `m_baryon`

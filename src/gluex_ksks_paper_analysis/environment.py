@@ -14,9 +14,11 @@ DATABASE_PATH = ANALYSIS_PATH / 'databases'
 RCDB_CONNECTION = DATABASE_PATH / 'rcdb.sqlite'
 CCDB_CONNECTION = DATABASE_PATH / 'ccdb.sqlite'
 POLARIZED_RUN_NUMBERS_PATH = DATABASE_PATH / 'polarized_run_numbers.pickle'
-PSFLUX_PATH = DATABASE_PATH / 'psflux.pickle'
-CCDB_PATH = DATABASE_PATH / 'ccdb.pickle'
-RCDB_PATH = DATABASE_PATH / 'rcdb.pickle'
+PSFLUX_DATA_PATH = DATABASE_PATH / 'psflux.pickle'
+ACCIDENTAL_SCALING_FACTORS_PATH = DATABASE_PATH / 'accidental_scaling_factors.pickle'
+POLARIZATION_DATA_PATH = DATABASE_PATH / 'polarization_data.pickle'
+
+RUN_PERIODS = ['s17', 's18', 'f18', 's20']
 
 POL_HIST_PATHS = {
     's17': DATABASE_PATH / 's17.root',

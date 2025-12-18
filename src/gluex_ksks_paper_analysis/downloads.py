@@ -6,21 +6,18 @@ from pathlib import Path, UnsupportedOperation
 from typing import TYPE_CHECKING
 
 import paramiko
-import requests
 from tqdm import tqdm
-from loguru import logger
 
 from gluex_ksks_paper_analysis.databases import build_caches
 from gluex_ksks_paper_analysis.environment import (
     CCDB_CONNECTION,
-    CCDB_PATH,
     DATABASE_PATH,
     DATASET_PATH,
     POL_HIST_PATHS,
     POLARIZED_RUN_NUMBERS_PATH,
-    PSFLUX_PATH,
+    PSFLUX_DATA_PATH,
     RCDB_CONNECTION,
-    RCDB_PATH,
+    POLARIZATION_DATA_PATH,
 )
 
 if TYPE_CHECKING:
@@ -82,88 +79,53 @@ def _progress_callback(bar: tqdm):
 
 
 def get_files(
-    remote_paths: list[Path],
-    local_dir: Path,
+    download_map: list[tuple[list[Path] | Path, Path]],
     user: str,
     hostname: str = 'ernest.phys.cmu.edu',
     port: int = 22,
 ) -> None:
-    local_dir.mkdir(parents=True, exist_ok=True)
+    for srcs, local_path in download_map:
+        if isinstance(srcs, list):
+            local_path.mkdir(parents=True, exist_ok=True)
     if socket.getfqdn().endswith('.phys.cmu.edu'):
-        for src in remote_paths:
-            dest = local_dir / src.name
-            hardlink_or_copy(src, dest)
+        for srcs, local_path in download_map:
+            if isinstance(srcs, list):
+                for src in srcs:
+                    dest = local_path / src.name
+                    hardlink_or_copy(src, dest)
+            else:
+                hardlink_or_copy(srcs, local_path)
         return
 
     client = connect_to_remote(user, hostname, port)
     sftp = client.open_sftp()
     try:
-        for src in remote_paths:
-            dest = local_dir / src.name
-            with tqdm(
-                unit='B', unit_scale=True, unit_divisor=1024, desc=src.name
-            ) as bar:
-                sftp.get(str(src), str(dest), callback=_progress_callback(bar))
+        for srcs, local_path in download_map:
+            if isinstance(srcs, list):
+                for src in srcs:
+                    dest = local_path / src.name
+                    with tqdm(
+                        unit='B', unit_scale=True, unit_divisor=1024, desc=src.name
+                    ) as bar:
+                        sftp.get(str(src), str(dest), callback=_progress_callback(bar))
+            else:
+                with tqdm(
+                    unit='B', unit_scale=True, unit_divisor=1024, desc=srcs.name
+                ) as bar:
+                    sftp.get(
+                        str(srcs), str(local_path), callback=_progress_callback(bar)
+                    )
+
     finally:
         sftp.close()
         client.close()
-
-
-def download_file(url: str, path: Path) -> None:
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-        'AppleWebKit/537.36 (KHTML, like Gecko) '
-        'Chrome/124.0.0.0 Safari/537.36'
-    }
-    logger.info(f'Downloading file from <{url}>')
-    with requests.get(url, headers=headers, stream=True, timeout=10) as response:
-        response.raise_for_status()
-        total = int(response.headers.get('content-length', 0))
-        with (
-            path.open('wb') as f,
-            tqdm(
-                total=total,
-                unit='B',
-                unit_scale=True,
-                unit_divisor=1024,
-                desc=path.name,
-            ) as bar,
-        ):
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-                    bar.update(len(chunk))
-    logger.info(f"File '{path}' downloaded successfully!")
-
-
-def get_rcdb() -> None:
-    if not RCDB_CONNECTION.exists():
-        download_file('https://halldweb.jlab.org/dist/rcdb.sqlite', RCDB_CONNECTION)
-
-
-def get_ccdb() -> None:
-    if not CCDB_CONNECTION.exists():
-        download_file('https://halldweb.jlab.org/dist/ccdb.sqlite', CCDB_CONNECTION)
-
-
-def download_databases() -> None:
-    skip_rcdb = (
-        RCDB_PATH.exists()
-        and PSFLUX_PATH.exists()
-        and POLARIZED_RUN_NUMBERS_PATH.exists()
-    )
-    skip_ccdb = CCDB_PATH.exists() and PSFLUX_PATH.exists()
-    if not skip_rcdb:
-        get_rcdb()
-    if not skip_ccdb:
-        get_ccdb()
 
 
 def download_data() -> None:
     remote_dir = Path('/raid3/nhoffman/ksks-data')
     remote_data_paths = [
         remote_dir / f'{name}.parquet'
-        for name in ['data', 'sigmc', 'bkgmc']
+        for name in ['data', 'sigmc', 'bkgmc', 'genmc']
         if not (DATASET_PATH / f'{name}.parquet').exists()
     ]
     remote_pol_hist_paths = [
@@ -176,9 +138,20 @@ def download_data() -> None:
             'Some required data files were missing and need to be downloaded from ernest.phys.cmu.edu'
         )
         username = input('Please enter your username: ')
+        download_map = []
         if remote_pol_hist_paths:
-            get_files(remote_pol_hist_paths, DATABASE_PATH, username)
-        download_databases()
-        build_caches()
+            download_map.append((remote_pol_hist_paths, DATABASE_PATH))
+        skip_rcdb = (
+            PSFLUX_DATA_PATH.exists()
+            and POLARIZED_RUN_NUMBERS_PATH.exists()
+            and POLARIZATION_DATA_PATH.exists()
+        ) or RCDB_CONNECTION.exists()
+        skip_ccdb = (PSFLUX_DATA_PATH.exists()) or CCDB_CONNECTION.exists()
+        if not skip_rcdb:
+            download_map.append((remote_dir / 'rcdb.sqlite', RCDB_CONNECTION))
+        if not skip_ccdb:
+            download_map.append((remote_dir / 'ccdb.sqlite', CCDB_CONNECTION))
         if remote_data_paths:
-            get_files(remote_data_paths, DATASET_PATH, username)
+            download_map.append((remote_data_paths, DATASET_PATH))
+        get_files(download_map, username)
+        build_caches()

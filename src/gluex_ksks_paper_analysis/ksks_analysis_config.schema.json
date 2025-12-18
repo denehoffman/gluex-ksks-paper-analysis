@@ -12,7 +12,6 @@
         "Proton_Z",
         "pol_magnitude",
         "pol_angle",
-        "is_polarized",
         "m_meson",
         "ksb_costheta",
         "m_baryon",
