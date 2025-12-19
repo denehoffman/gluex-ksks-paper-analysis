@@ -44,7 +44,7 @@ class StepwisePDF2D(ComponentPDF):
         *,
         bins: int = 2000,
         limits: tuple[float, float] = (0.0, 2.0),
-        eps: float = np.finfo(float).tiny,
+        eps: float = float(np.finfo(float).tiny),
         bblite: bool = False,
     ) -> StepwisePDF2D:
         t1 = np.asarray(t1)
@@ -77,7 +77,7 @@ class StepwisePDF2D(ComponentPDF):
             return [self.alpha_bounds] * self.n_theta()
         return []
 
-    def theta0(self, _data: ArrayLike) -> NDArray:
+    def theta0(self, data: ArrayLike) -> NDArray:
         if self.bblite:
             return np.ones(self.n_theta(), dtype=float)
         return np.array([])
@@ -143,19 +143,19 @@ class SharedTauExponential2D(ComponentPDF):
     def theta_bounds(self) -> list[tuple[float | None, float | None]]:
         return [(1e-12, None)]
 
-    def theta0(self, _data: ArrayLike) -> NDArray:
+    def theta0(self, data: ArrayLike) -> NDArray:
         return np.asarray([self.lda0], dtype=float)
 
     def _norm(self, lda: float) -> float:
         a, b = RFL_RANGE
         z1 = np.exp(-lda * a) - np.exp(-lda * b)
         z = z1 * z1
-        return max(float(z), np.finfo(float).tiny)
+        return float(max(float(z), np.finfo(float).tiny))
 
     def _norm1d(self, lda: float) -> float:
         a, b = RFL_RANGE
         z1 = np.exp(-lda * a) - np.exp(-lda * b)
-        return max(float(z1), np.finfo(float).tiny)
+        return float(max(float(z1), np.finfo(float).tiny))
 
     def pdf(self, x: ArrayLike, theta: ArrayLike) -> NDArray:
         x = np.asarray(x)
@@ -168,7 +168,7 @@ class SharedTauExponential2D(ComponentPDF):
         lda = float(np.asarray(theta)[0])
         return np.exp(-lda * x) * lda / self._norm1d(lda)
 
-    def log_penalty(self, _theta: ArrayLike) -> float:
+    def log_penalty(self, theta: ArrayLike) -> float:
         return 0.0
 
 

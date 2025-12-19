@@ -18,6 +18,7 @@ from gluex_ksks_paper_analysis.environment import (
     PSFLUX_DATA_PATH,
     RCDB_CONNECTION,
     POLARIZATION_DATA_PATH,
+    RUN_PERIODS,
 )
 
 if TYPE_CHECKING:
@@ -124,9 +125,10 @@ def get_files(
 def download_data() -> None:
     remote_dir = Path('/raid3/nhoffman/ksks-data')
     remote_data_paths = [
-        remote_dir / f'{name}.parquet'
+        remote_dir / f'{name}_{run_period}.parquet'
         for name in ['data', 'sigmc', 'bkgmc', 'genmc']
-        if not (DATASET_PATH / f'{name}.parquet').exists()
+        for run_period in RUN_PERIODS
+        if not (DATASET_PATH / f'{name}_{run_period}.parquet').exists()
     ]
     remote_pol_hist_paths = [
         remote_dir / Path('pol_hists') / f'{rp}.root'
