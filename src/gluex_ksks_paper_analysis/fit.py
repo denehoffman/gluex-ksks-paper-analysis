@@ -101,7 +101,7 @@ class Wave:
                 ld.parameter(f'{self} imag'),
             )
         kappa = ld.PhaseSpaceFactor(
-            'kappa',
+            f'kappa {self}',
             recoil_mass,
             daughter_1_mass,
             daughter_2_mass,

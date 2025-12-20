@@ -421,7 +421,7 @@ dependencies = [
     { name = "gluex-lumi" },
     { name = "gluex-rcdb" },
     { name = "jsonschema" },
-    { name = "laddu" },
+    { name = "laddu", extra = ["mpi"] },
     { name = "loguru" },
     { name = "matplotlib" },
     { name = "numpy" },
@@ -440,7 +440,7 @@ requires-dist = [
     { name = "gluex-lumi", specifier = ">=0.1.2" },
     { name = "gluex-rcdb", specifier = ">=0.1.2" },
     { name = "jsonschema", specifier = ">=4.25.1" },
-    { name = "laddu", specifier = ">=0.12.1" },
+    { name = "laddu", extras = ["mpi"], specifier = ">=0.12.1" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "matplotlib", specifier = ">=3.10.6" },
     { name = "numpy", specifier = ">=2.3.3" },
@@ -621,6 +621,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/31/a8/06d573d50dec9310260234bf1dac18e64e939414bf02f6546e650fe3e105/laddu-0.12.1-py3-none-any.whl", hash = "sha256:dc8aa65ff72b5f8842c42633727789d49663df4743ee2e5ba683ece3084c4289", size = 38483, upload-time = "2025-12-18T06:40:07.437Z" },
 ]
 
+[package.optional-dependencies]
+mpi = [
+    { name = "laddu-mpi" },
+]
+
 [[package]]
 name = "laddu-cpu"
 version = "0.12.1"
@@ -643,6 +648,21 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/62/6b/67ae48dcb8a16626e26fd7a3b8553c9280ea0efa8036a24ff26f29f44ccf/laddu_cpu-0.12.1-cp37-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:5c4f256523b9ac6cfc91bd6fe1f31127e393054b3db297c7cfaacee05f990ec4", size = 8330608, upload-time = "2025-12-18T06:39:26.574Z" },
     { url = "https://files.pythonhosted.org/packages/7a/66/013fc8d8ec6be412773b3e92d221606fdd25d94703cd3d95436fde9011de/laddu_cpu-0.12.1-cp37-abi3-win_amd64.whl", hash = "sha256:0f2758c196927e0db2bb12a2f0973d99e56f09ef4cd8904329f560aa84431028", size = 8044878, upload-time = "2025-12-18T06:39:17.563Z" },
     { url = "https://files.pythonhosted.org/packages/ae/33/14acb76da83fadd0b11b741a75410c8b27d8e4e6f32b15432ea2797d8211/laddu_cpu-0.12.1-cp37-abi3-win_arm64.whl", hash = "sha256:5e21ca457e48bcaa029951921cbeac9d2b0b6c3c72c8077773877c96a17cda7f", size = 7320438, upload-time = "2025-12-18T06:39:13.882Z" },
+]
+
+[[package]]
+name = "laddu-mpi"
+version = "0.12.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/dc/5c/c6c9f6b11384107eea05a9bd2ca6557b85fb642710099d267ec19ee87ea0/laddu_mpi-0.12.1.tar.gz", hash = "sha256:2cbb41e78a0316cf1a3d867662e0834a3b656a2a629905de1b0041b1bea7cfa1", size = 701332, upload-time = "2025-12-18T06:39:58.3Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2e/92/b4e588e4247d89762123ac9b9ab5bb73ac731ea7e49bd96c248227ca7eeb/laddu_mpi-0.12.1-cp37-abi3-macosx_10_12_x86_64.whl", hash = "sha256:731547254ed08dc5c4671082945029f167dc63129e79084f8d1290d15be1e36d", size = 7633621, upload-time = "2025-12-18T06:39:50.379Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/0d/a47d0044604431078f0f87dca664323b6519bc29f2b808180288b1962214/laddu_mpi-0.12.1-cp37-abi3-macosx_11_0_arm64.whl", hash = "sha256:ee50e01c2f030e39bcc3070b424291ffedd806ef91ddce827c112228de188a47", size = 7036420, upload-time = "2025-12-18T06:40:01.764Z" },
+    { url = "https://files.pythonhosted.org/packages/68/26/c045c9f93ded31ef550450a397c27a7ca26ff8611ec5de5e2c8926a9e1a6/laddu_mpi-0.12.1-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:96cfc140cfa516da9d83b3f50c8d50d6472bf3a3fb43e34e946ace8a6057373e", size = 20009571, upload-time = "2025-12-18T06:40:04.261Z" },
+    { url = "https://files.pythonhosted.org/packages/51/82/45aa48d1b7a656eda899e2f67d4a9c2ed892590a4990cdbdfbd6e037185f/laddu_mpi-0.12.1-cp37-abi3-win_amd64.whl", hash = "sha256:b20975ceade68d9819179ed229f8187137e7586df40446d0f32d21a326153da9", size = 8090448, upload-time = "2025-12-18T06:39:52.143Z" },
 ]
 
 [[package]]

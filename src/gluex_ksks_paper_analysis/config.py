@@ -365,6 +365,7 @@ class Dataset:
             for step in steps:
                 path /= step
             path /= f'{self.source}_{run_period}.parquet'
+            logger.debug(f'Searching for dataset: {path}')
             if path.exists():
                 return pl.scan_parquet(path)
             df = get_from_steps(steps[:-1])
@@ -374,7 +375,7 @@ class Dataset:
                 raise ConfigError(msg)
             if cut := cuts.get(last_step):
                 df = cut.apply(df)
-                if cut.cache:
+                if cut.cache and ld.mpi.is_root():
                     path.parent.mkdir(parents=True, exist_ok=True)
                     df.select(_BASE_COLUMNS).sink_parquet(path)
                 return df
@@ -388,7 +389,7 @@ class Dataset:
                     ds_bkgmc.df(run_period, cuts, weights),
                     is_mc,
                 )
-                if weight.cache:
+                if weight.cache and ld.mpi.is_root():
                     path.parent.mkdir(parents=True, exist_ok=True)
                     df.select(_BASE_COLUMNS).sink_parquet(path)
                 return df
@@ -487,6 +488,28 @@ class Fit:
             'weight',
         ]
     )
+    required_columns_genmc: list[str] = field(
+        default_factory=lambda: [
+            'beam_e',
+            'beam_px',
+            'beam_py',
+            'beam_pz',
+            'proton_e',
+            'proton_px',
+            'proton_py',
+            'proton_pz',
+            'kshort1_e',
+            'kshort1_px',
+            'kshort1_py',
+            'kshort1_pz',
+            'kshort2_e',
+            'kshort2_px',
+            'kshort2_py',
+            'kshort2_pz',
+            'pol_magnitude',
+            'pol_angle',
+        ]
+    )
 
     def fit(
         self,
@@ -503,8 +526,9 @@ class Fit:
         if not fit_path.exists():
             logger.info(f'Running fit: {name}')
             fit_result = self.fit_waves(datasets, cuts, weights)
-            fit_path.parent.mkdir(parents=True, exist_ok=True)
-            pickle.dump(fit_result, fit_path.open('wb'))
+            if ld.mpi.is_root():
+                fit_path.parent.mkdir(parents=True, exist_ok=True)
+                pickle.dump(fit_result, fit_path.open('wb'))
         else:
             logger.info(f'Skipping fit: {name}')
             fit_result = pickle.load(fit_path.open('rb'))
@@ -514,13 +538,13 @@ class Fit:
             plot_path /= step
         cross_section_plot_path = plot_path / f'{name}_xsec.png'
         plot_path /= name + '.png'
-        if not plot_path.exists():
+        if not plot_path.exists() and ld.mpi.is_root():
             logger.info(f'Plotting fit: {name}')
             self.plot_fit(Path(plot_path), fit_result)
         else:
             logger.info(f'Skipping plot: {name}')
 
-        if not cross_section_plot_path.exists():
+        if not cross_section_plot_path.exists() and ld.mpi.is_root():
             logger.info(f'Plotting cross-sections: {name}')
             self.plot_cross_sections(Path(cross_section_plot_path), fit_result)
         else:
@@ -620,7 +644,7 @@ class Fit:
                 add_variable(
                     'polarization', datasets[self.genmc].df(run_period, cuts, weights)
                 )
-                .select(self.required_columns)
+                .select(self.required_columns_genmc)
                 .collect()
             )
             for run_period in RUN_PERIODS
@@ -1041,6 +1065,7 @@ def load_config(path: str | Path) -> Config:
         k: Dataset(source=v['source'], steps=list(v.get('steps', [])))
         for k, v in raw['datasets'].items()
     }
+    datasets['genmc'] = Dataset(source='genmc', steps=[])
 
     plots: dict[str, Plot1D | Plot2D] = {}
     for name, spec in raw['plots'].items():

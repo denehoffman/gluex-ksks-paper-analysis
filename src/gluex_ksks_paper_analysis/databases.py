@@ -81,6 +81,7 @@ class AccidentalScalingFactors:
             self.accidental_scaling_factors = pickle.load(
                 ACCIDENTAL_SCALING_FACTORS_PATH.open('rb')
             )  # noqa: S301
+            return
         logger.info('Building accidental scaling factors cache...')
         self.accidental_scaling_factors = self._build_from_db()
 
@@ -161,6 +162,7 @@ class PSFluxData:
                 self.tagh_flux,
                 self.tagm_flux,
             ) = pickle.load(PSFLUX_DATA_PATH.open('rb'))  # noqa: S301
+            return
         logger.info('Building flux cache...')
         (
             self.tagged_flux,
@@ -224,8 +226,10 @@ class PolarizationData:
         self.pol_angle_data: dict[int, tuple[str, str, float]] = {}
         self.pol_magnitudes: dict[str, dict[str, Histogram]] = {}
         if POLARIZATION_DATA_PATH.exists():
-            with POLARIZATION_DATA_PATH.open('rb') as f:
-                self.pol_angle_data, self.pol_magnitudes = pickle.load(f)  # noqa: S301
+            self.pol_angle_data, self.pol_magnitudes = pickle.load(
+                POLARIZATION_DATA_PATH.open('rb')
+            )  # noqa: S301
+            return
         logger.info('Building polarization data cache...')
         self.pol_angle_data, self.pol_magnitudes = self._build_from_db()
         POLARIZATION_DATA_PATH.parent.mkdir(parents=True, exist_ok=True)

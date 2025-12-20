@@ -58,43 +58,43 @@ bins = 50
 limits = [0.0, 1.5]
 
 [datasets.data]
-source = "data.parquet"
+source = "data"
 steps  = ["accid", "standard", "splot"]
 
 [datasets.data_double_hist]
-source = "data.parquet"
+source = "data"
 steps  = ["accid", "standard", "splot_double_hist"]
 
 [datasets.data_gauss]
-source = "data.parquet"
+source = "data"
 steps  = ["accid", "standard", "splot_gauss"]
 
 [datasets.data_low_t]
-source = "data.parquet"
+source = "data"
 steps  = ["accid", "standard", "mandelstam_low_t", "splot"]
 
 [datasets.data_high_t]
-source = "data.parquet"
+source = "data"
 steps  = ["accid", "standard", "mandelstam_high_t", "splot"]
 
 [datasets.data_very_high_t]
-source = "data.parquet"
+source = "data"
 steps  = ["accid", "standard", "mandelstam_very_high_t", "splot"]
 
 [datasets.accmc]
-source = "sigmc.parquet"
+source = "sigmc"
 steps  = ["accid", "standard"]
 
 [datasets.accmc_low_t]
-source = "sigmc.parquet"
+source = "sigmc"
 steps  = ["accid", "standard", "mandelstam_low_t"]
 
 [datasets.accmc_high_t]
-source = "sigmc.parquet"
+source = "sigmc"
 steps  = ["accid", "standard", "mandelstam_high_t"]
 
 [datasets.accmc_very_high_t]
-source = "sigmc.parquet"
+source = "sigmc"
 steps  = ["accid", "standard", "mandelstam_very_high_t"]
 
 [fits.spd2p]
