@@ -77,7 +77,9 @@ class Histogram:
         return fig
 
     def __add__(self, other: Histogram) -> Histogram:
-        assert self.edges == other.edges
+        if not np.array_equal(self.edges, other.edges):
+            msg = 'Histogram edges must match to add'
+            raise ValueError(msg)
         out = Histogram.empty_like(self)
         out.counts = self.counts + other.counts
         out.errors = np.sqrt(np.power(self.errors, 2) + np.power(other.errors, 2))
@@ -88,9 +90,12 @@ class Histogram:
         self.counts = out.counts
         self.edges = out.edges
         self.errors = out.errors
+        return self
 
     def __mul__(self, other: Histogram) -> Histogram:
-        assert self.edges == other.edges
+        if not np.array_equal(self.edges, other.edges):
+            msg = 'Histogram edges must match to multiply'
+            raise ValueError(msg)
         out = Histogram.empty_like(self)
         out.counts = self.counts * other.counts
         out.errors = out.counts * np.sqrt(
@@ -104,9 +109,12 @@ class Histogram:
         self.counts = out.counts
         self.edges = out.edges
         self.errors = out.errors
+        return self
 
     def __truediv__(self, other: Histogram) -> Histogram:
-        assert self.edges == other.edges
+        if not np.array_equal(self.edges, other.edges):
+            msg = 'Histogram edges must match to divide'
+            raise ValueError(msg)
         out = Histogram.empty_like(self)
         out.counts = self.counts / other.counts
         out.errors = out.counts * np.sqrt(
@@ -120,6 +128,7 @@ class Histogram:
         self.counts = out.counts
         self.edges = out.edges
         self.errors = out.errors
+        return self
 
     def scalar_add(self, value: float, error: float = 0.0) -> Histogram:
         out = Histogram.empty_like(self)

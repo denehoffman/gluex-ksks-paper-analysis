@@ -6,21 +6,22 @@ import pickle
 import re
 import tomllib
 from dataclasses import dataclass, field
-from tqdm.auto import trange
+from functools import cached_property
 from functools import reduce
 from importlib import resources
 from pathlib import Path
-from functools import cached_property
 from typing import TYPE_CHECKING
 
 import laddu as ld
 import matplotlib.pyplot as plt
 import numpy as np
 import polars as pl
+import pyarrow.parquet as pq
 from jsonschema import Draft202012Validator
+from loguru import logger
 from numpy.typing import NDArray
 from pint import Quantity, Unit, UnitRegistry
-from loguru import logger
+from tqdm.auto import trange, tqdm
 
 from gluex_ksks_paper_analysis.databases import (
     AccidentalScalingFactors,
@@ -455,6 +456,30 @@ class FitResult:
         return out
 
 
+@dataclass
+class FitSummary:
+    data: str
+    accmc: str
+    genmc: str
+    waves: list[Wave]
+    fits: list[ld.MinimizationSummary]
+    bootstraps: list[list[ld.MinimizationSummary]]
+    bin_edges: NDArray
+    data_projection: dict[str, Histogram]
+    projections: dict[str, dict[str, Histogram]]
+
+
+@dataclass
+class GeneratedMCProjections:
+    genmc_projections: dict[str, dict[str, Histogram]]
+
+
+@dataclass
+class BinnedDatasets:
+    data: dict[str, ld.BinnedDataset]
+    accmc: dict[str, ld.BinnedDataset]
+
+
 @dataclass(frozen=True)
 class Fit:
     waves: list[str]
@@ -510,6 +535,7 @@ class Fit:
             'pol_angle',
         ]
     )
+    genmc_batch_size: int = 10_000_000
 
     def fit(
         self,
@@ -517,38 +543,20 @@ class Fit:
         datasets: dict[str, Dataset],
         cuts: dict[str, Cut],
         weights: dict[str, Weight],
-    ):
-        fit_path = FITS_PATH
-        for step in datasets[self.data].steps:
-            fit_path /= step
-        fit_path /= name + '.pkl'
-
-        if not fit_path.exists():
-            logger.info(f'Running fit: {name}')
-            fit_result = self.fit_waves(datasets, cuts, weights)
-            if ld.mpi.is_root():
-                fit_path.parent.mkdir(parents=True, exist_ok=True)
-                pickle.dump(fit_result, fit_path.open('wb'))
-        else:
-            logger.info(f'Skipping fit: {name}')
-            fit_result = pickle.load(fit_path.open('rb'))
-
-        plot_path = PLOTS_PATH
-        for step in datasets[self.data].steps:
-            plot_path /= step
-        cross_section_plot_path = plot_path / f'{name}_xsec.png'
-        plot_path /= name + '.png'
-        if not plot_path.exists() and ld.mpi.is_root():
-            logger.info(f'Plotting fit: {name}')
-            self.plot_fit(Path(plot_path), fit_result)
-        else:
-            logger.info(f'Skipping plot: {name}')
-
-        if not cross_section_plot_path.exists() and ld.mpi.is_root():
-            logger.info(f'Plotting cross-sections: {name}')
-            self.plot_cross_sections(Path(cross_section_plot_path), fit_result)
-        else:
-            logger.info(f'Skipping cross-sections: {name}')
+    ) -> None:
+        summary, preloaded_binned = self._ensure_fit_summary(
+            name, datasets, cuts, weights
+        )
+        genmc_projections = self._ensure_genmc_projections(
+            name,
+            summary,
+            datasets,
+            cuts,
+            weights,
+            preloaded_binned,
+        )
+        fit_result = self._build_fit_result(summary, genmc_projections)
+        self._render_plots(name, datasets, fit_result)
 
     def fit_waves(
         self,
@@ -556,38 +564,12 @@ class Fit:
         cuts: dict[str, Cut],
         weights: dict[str, Weight],
         seed: int = 0,
-    ) -> FitResult:
-        ds_data = {
-            run_period: ld.Dataset.from_polars(
-                add_variable(
-                    'polarization', datasets[self.data].df(run_period, cuts, weights)
-                )
-                .select(self.required_columns)
-                .collect()
-            )
-            for run_period in RUN_PERIODS
-        }
-        ds_accmc = {
-            run_period: ld.Dataset.from_polars(
-                add_variable(
-                    'polarization', datasets[self.accmc].df(run_period, cuts, weights)
-                )
-                .select(self.required_columns)
-                .collect()
-            )
-            for run_period in RUN_PERIODS
-        }
+    ) -> tuple[FitSummary, BinnedDatasets]:
+        binned_datasets = self._load_binned_datasets(datasets, cuts, weights)
+        ds_data_binned = binned_datasets.data
+        ds_accmc_binned = binned_datasets.accmc
         waves = [Wave(w) for w in self.waves]
         model = build_model(waves)
-        mass = ld.Mass(['kshort1', 'kshort2'])
-        ds_data_binned = {
-            run_period: ds_data_rp.bin_by(mass, self.bins, self.limits)
-            for run_period, ds_data_rp in ds_data.items()
-        }
-        ds_accmc_binned = {
-            run_period: ds_accmc_rp.bin_by(mass, self.bins, self.limits)
-            for run_period, ds_accmc_rp in ds_accmc.items()
-        }
         rng = np.random.default_rng(seed)
         best_fits: list[ld.MinimizationSummary] = []
         bootstraps: list[list[ld.MinimizationSummary]] = []
@@ -600,9 +582,9 @@ class Fit:
                 ).to_expression()
                 for run_period in RUN_PERIODS
             ]
-            nll_ibin = ld.likelihood_sum(nlls_ibin).load()  # TODO: Do we need scalars?
+            nll_ibin = ld.likelihood_sum(nlls_ibin).load()
             best_fit_ibin = None
-            for iiter in trange(
+            for _ in trange(
                 self.n_iterations, desc='Iterations', position=1, leave=False
             ):
                 p0 = rng.uniform(-100.0, 100.0, len(nll_ibin.parameters))
@@ -626,9 +608,7 @@ class Fit:
                     ).to_expression()
                     for run_period in RUN_PERIODS
                 ]
-                nll_iboot = ld.likelihood_sum(
-                    nlls_iboot
-                ).load()  # TODO: Do we need scalars?
+                nll_iboot = ld.likelihood_sum(nlls_iboot).load()
                 bootstrap_res = nll_iboot.minimize(
                     best_fit_ibin.x, settings={'skip_hessian': True}
                 )
@@ -638,21 +618,7 @@ class Fit:
                 bootstraps_ibin.append(bootstrap_res)
             bootstraps.append(bootstraps_ibin)
         bin_edges = np.histogram_bin_edges([], self.bins, range=self.limits)
-        logger.info('Projecting fit results...')
-        ds_genmc = {
-            run_period: ld.Dataset.from_polars(
-                add_variable(
-                    'polarization', datasets[self.genmc].df(run_period, cuts, weights)
-                )
-                .select(self.required_columns_genmc)
-                .collect()
-            )
-            for run_period in RUN_PERIODS
-        }
-        ds_genmc_binned = {
-            run_period: ds_genmc_rp.bin_by(mass, self.bins, self.limits)
-            for run_period, ds_genmc_rp in ds_genmc.items()
-        }
+        logger.info('Projecting fit results (data & accepted MC)...')
         projections: dict[str, dict[str, Histogram]] = {
             str(wave): {
                 run_period: Histogram.empty(self.bins, self.limits)
@@ -660,18 +626,7 @@ class Fit:
             }
             for wave in waves
         }
-        genmc_projections: dict[str, dict[str, Histogram]] = {
-            str(wave): {
-                run_period: Histogram.empty(self.bins, self.limits)
-                for run_period in RUN_PERIODS
-            }
-            for wave in waves
-        }
         projections['total'] = {
-            run_period: Histogram.empty(self.bins, self.limits)
-            for run_period in RUN_PERIODS
-        }
-        genmc_projections['total'] = {
             run_period: Histogram.empty(self.bins, self.limits)
             for run_period in RUN_PERIODS
         }
@@ -686,28 +641,14 @@ class Fit:
                     ds_data_binned[run_period][ibin],
                     ds_accmc_binned[run_period][ibin],
                 )
-                ds_genmc_ibin = ds_genmc_binned[run_period][ibin]
                 result_ibin = best_fits[ibin]
                 bootstraps_ibin = bootstraps[ibin]
-                genmc_evaluator = model.load(ds_genmc_ibin)
                 projections['total'][run_period].counts[ibin] = np.sum(
                     nll_ibin.project(result_ibin.x)
-                )
-                genmc_projections['total'][run_period].counts[ibin] = np.sum(
-                    nll_ibin.project(result_ibin.x, mc_evaluator=genmc_evaluator)
                 )
                 projections['total'][run_period].errors[ibin] = np.std(
                     [
                         np.sum(nll_ibin.project(bootstrap.x))
-                        for bootstrap in bootstraps_ibin
-                    ],
-                    ddof=1,
-                )
-                genmc_projections['total'][run_period].errors[ibin] = np.std(
-                    [
-                        np.sum(
-                            nll_ibin.project(bootstrap.x, mc_evaluator=genmc_evaluator)
-                        )
                         for bootstrap in bootstraps_ibin
                     ],
                     ddof=1,
@@ -725,13 +666,6 @@ class Fit:
                             wave.amplitude_names,
                         )
                     )
-                    genmc_projections[str(wave)][run_period].counts[ibin] = np.sum(
-                        nll_ibin.project_with(
-                            result_ibin.x,
-                            wave.amplitude_names,
-                            mc_evaluator=genmc_evaluator,
-                        )
-                    )
                     projections[str(wave)][run_period].errors[ibin] = np.std(
                         [
                             np.sum(
@@ -744,31 +678,287 @@ class Fit:
                         ],
                         ddof=1,
                     )
-                    genmc_projections[str(wave)][run_period].errors[ibin] = np.std(
-                        [
-                            np.sum(
-                                nll_ibin.project_with(
-                                    bootstrap.x,
-                                    wave.amplitude_names,
-                                    mc_evaluator=genmc_evaluator,
+        return (
+            FitSummary(
+                data=self.data,
+                accmc=self.accmc,
+                genmc=self.genmc,
+                waves=waves,
+                fits=best_fits,
+                bootstraps=bootstraps,
+                bin_edges=bin_edges,
+                data_projection=data_projection,
+                projections=projections,
+            ),
+            binned_datasets,
+        )
+
+    def _ensure_fit_summary(
+        self,
+        name: str,
+        datasets: dict[str, Dataset],
+        cuts: dict[str, Cut],
+        weights: dict[str, Weight],
+    ) -> tuple[FitSummary, BinnedDatasets | None]:
+        summary_path = self._summary_path(name, datasets)
+        if summary_path.exists():
+            logger.info(f'Loading fit summary: {name}')
+            return pickle.load(summary_path.open('rb')), None
+        logger.info(f'Running fit: {name}')
+        summary, binned = self.fit_waves(datasets, cuts, weights)
+        if ld.mpi.is_root():
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            pickle.dump(summary, summary_path.open('wb'))
+        return summary, binned
+
+    def _ensure_genmc_projections(
+        self,
+        name: str,
+        summary: FitSummary,
+        datasets: dict[str, Dataset],
+        cuts: dict[str, Cut],
+        weights: dict[str, Weight],
+        preloaded_binned: BinnedDatasets | None,
+    ) -> GeneratedMCProjections:
+        projection_path = self._genmc_projection_path(name, datasets)
+        if projection_path.exists():
+            logger.info(f'Loading generated MC projections: {name}')
+            return pickle.load(projection_path.open('rb'))
+        logger.info(f'Projecting generated MC: {name}')
+        projections = self.project_generated_mc(
+            summary, datasets, cuts, weights, preloaded_binned
+        )
+        if ld.mpi.is_root():
+            projection_path.parent.mkdir(parents=True, exist_ok=True)
+            pickle.dump(projections, projection_path.open('wb'))
+        return projections
+
+    def project_generated_mc(
+        self,
+        summary: FitSummary,
+        datasets: dict[str, Dataset],
+        cuts: dict[str, Cut],
+        weights: dict[str, Weight],
+        preloaded_binned: BinnedDatasets | None,
+    ) -> GeneratedMCProjections:
+        if preloaded_binned is None:
+            binned = self._load_binned_datasets(datasets, cuts, weights)
+        else:
+            binned = preloaded_binned
+        ds_data_binned = binned.data
+        ds_accmc_binned = binned.accmc
+        waves = summary.waves
+        model = build_model(waves)
+        mass = ld.Mass(['kshort1', 'kshort2'])
+        genmc_projections: dict[str, dict[str, Histogram]] = {
+            str(wave): {
+                run_period: Histogram.empty(self.bins, self.limits)
+                for run_period in RUN_PERIODS
+            }
+            for wave in waves
+        }
+        genmc_projections['total'] = {
+            run_period: Histogram.empty(self.bins, self.limits)
+            for run_period in RUN_PERIODS
+        }
+        n_bootstraps = len(summary.bootstraps[0]) if summary.bootstraps else 0
+        bootstrap_totals: dict[str, dict[str, NDArray]] | None = None
+        if n_bootstraps > 0:
+            bootstrap_totals = {
+                label: {
+                    run_period: np.zeros((self.bins, n_bootstraps), dtype=float)
+                    for run_period in RUN_PERIODS
+                }
+                for label in ['total'] + [str(wave) for wave in waves]
+            }
+        nll_cache = {
+            run_period: [
+                ld.NLL(
+                    model,
+                    ds_data_binned[run_period][ibin],
+                    ds_accmc_binned[run_period][ibin],
+                )
+                for ibin in range(self.bins)
+            ]
+            for run_period in RUN_PERIODS
+        }
+        genmc_dataset = datasets[self.genmc]
+        for run_period in RUN_PERIODS:
+            genmc_path = self._dataset_file_path(genmc_dataset, run_period)
+            if not genmc_path.exists():
+                logger.warning(f'Missing generated MC file: {genmc_path}')
+                continue
+            logger.info(f'Streaming generated MC for {run_period}: {genmc_path}')
+            pq_file = pq.ParquetFile(genmc_path)
+            total_rows = pq_file.metadata.num_rows if pq_file.metadata else None
+            row_bar = tqdm(
+                total=total_rows,
+                desc=f'{run_period} generated MC rows',
+                unit='rows',
+                disable=not ld.mpi.is_root(),
+            )
+            chunk_idx = 0
+            for batch in pq_file.iter_batches(batch_size=self.genmc_batch_size):
+                if batch.num_rows == 0:
+                    continue
+                df = pl.from_arrow(batch)
+                assert isinstance(df, pl.DataFrame)
+                lf = add_variable('polarization', df.lazy())
+                chunk_df = lf.select(self.required_columns_genmc).collect()
+                if chunk_df.is_empty():
+                    continue
+                ds_chunk = ld.Dataset.from_polars(chunk_df)
+                chunk_binned = ds_chunk.bin_by(mass, self.bins, self.limits)
+                filled_bins = 0
+                for ibin, ds_genmc_bin in enumerate(chunk_binned):  # ty:ignore[invalid-argument-type]
+                    if ds_genmc_bin.n_events == 0:
+                        continue
+                    filled_bins += 1
+                    nll_ibin = nll_cache[run_period][ibin]
+                    result_ibin = summary.fits[ibin]
+                    genmc_evaluator = model.load(ds_genmc_bin)
+                    genmc_projections['total'][run_period].counts[ibin] += np.sum(
+                        nll_ibin.project(result_ibin.x, mc_evaluator=genmc_evaluator)
+                    )
+                    if bootstrap_totals is not None:
+                        for iboot, bootstrap in enumerate(summary.bootstraps[ibin]):
+                            bootstrap_totals['total'][run_period][ibin, iboot] += (
+                                np.sum(
+                                    nll_ibin.project(
+                                        bootstrap.x, mc_evaluator=genmc_evaluator
+                                    )
                                 )
                             )
-                            for bootstrap in bootstraps_ibin
-                        ],
-                        ddof=1,
-                    )
+                    for wave in waves:
+                        genmc_projections[str(wave)][run_period].counts[ibin] += np.sum(
+                            nll_ibin.project_with(
+                                result_ibin.x,
+                                wave.amplitude_names,
+                                mc_evaluator=genmc_evaluator,
+                            )
+                        )
+                        if bootstrap_totals is not None:
+                            for iboot, bootstrap in enumerate(summary.bootstraps[ibin]):
+                                bootstrap_totals[str(wave)][run_period][
+                                    ibin, iboot
+                                ] += np.sum(
+                                    nll_ibin.project_with(
+                                        bootstrap.x,
+                                        wave.amplitude_names,
+                                        mc_evaluator=genmc_evaluator,
+                                    )
+                                )
+                chunk_idx += 1
+                row_bar.update(batch.num_rows)
+                row_bar.set_postfix(
+                    {
+                        'chunks': chunk_idx,
+                        'rows': chunk_df.height,
+                        'bins': filled_bins,
+                    }
+                )
+            row_bar.close()
+        if bootstrap_totals is not None:
+            for label, per_run in bootstrap_totals.items():
+                for run_period, arr in per_run.items():
+                    for ibin in range(self.bins):
+                        if n_bootstraps > 1:
+                            err = np.std(arr[ibin], ddof=1)
+                        else:
+                            err = 0.0
+                        genmc_projections[label][run_period].errors[ibin] = err
+        return GeneratedMCProjections(genmc_projections)
+
+    def _build_fit_result(
+        self, summary: FitSummary, projections: GeneratedMCProjections
+    ) -> FitResult:
         return FitResult(
-            self.data,
-            self.accmc,
-            self.genmc,
-            waves,
-            best_fits,
-            bootstraps,
-            bin_edges,
-            data_projection,
-            projections,
-            genmc_projections,
+            data=summary.data,
+            accmc=summary.accmc,
+            genmc=self.genmc,
+            waves=summary.waves,
+            fits=summary.fits,
+            bootstraps=summary.bootstraps,
+            bin_edges=summary.bin_edges,
+            data_projection=summary.data_projection,
+            projections=summary.projections,
+            genmc_projections=projections.genmc_projections,
         )
+
+    def _render_plots(
+        self, name: str, datasets: dict[str, Dataset], fit_result: FitResult
+    ) -> None:
+        plot_dir = PLOTS_PATH
+        for step in datasets[self.data].steps:
+            plot_dir /= step
+        plot_dir.mkdir(parents=True, exist_ok=True)
+        fit_plot = plot_dir / f'{name}.png'
+        cross_section_plot = plot_dir / f'{name}_xsec.png'
+        if not fit_plot.exists() and ld.mpi.is_root():
+            logger.info(f'Plotting fit: {name}')
+            self.plot_fit(fit_plot, fit_result)
+        else:
+            logger.info(f'Skipping fit plot: {name}')
+        if not cross_section_plot.exists() and ld.mpi.is_root():
+            logger.info(f'Plotting cross-sections: {name}')
+            self.plot_cross_sections(cross_section_plot, fit_result)
+        else:
+            logger.info(f'Skipping cross-section plot: {name}')
+
+    def _fit_directory(self, name: str, datasets: dict[str, Dataset]) -> Path:
+        fit_dir = FITS_PATH
+        for step in datasets[self.data].steps:
+            fit_dir /= step
+        return fit_dir / name
+
+    def _summary_path(self, name: str, datasets: dict[str, Dataset]) -> Path:
+        return self._fit_directory(name, datasets) / 'fit_summary.pkl'
+
+    def _genmc_projection_path(self, name: str, datasets: dict[str, Dataset]) -> Path:
+        return self._fit_directory(name, datasets) / 'genmc_projections.pkl'
+
+    def _dataset_file_path(self, dataset: Dataset, run_period: str) -> Path:
+        path = DATASET_PATH
+        for step in dataset.steps:
+            path /= step
+        return path / f'{dataset.source}_{run_period}.parquet'
+
+    def _load_binned_datasets(
+        self,
+        datasets: dict[str, Dataset],
+        cuts: dict[str, Cut],
+        weights: dict[str, Weight],
+    ) -> BinnedDatasets:
+        mass = ld.Mass(['kshort1', 'kshort2'])
+        ds_data = {
+            run_period: ld.Dataset.from_polars(
+                add_variable(
+                    'polarization', datasets[self.data].df(run_period, cuts, weights)
+                )
+                .select(self.required_columns)
+                .collect()
+            )
+            for run_period in RUN_PERIODS
+        }
+        ds_accmc = {
+            run_period: ld.Dataset.from_polars(
+                add_variable(
+                    'polarization', datasets[self.accmc].df(run_period, cuts, weights)
+                )
+                .select(self.required_columns)
+                .collect()
+            )
+            for run_period in RUN_PERIODS
+        }
+        ds_data_binned = {
+            run_period: ds_data_rp.bin_by(mass, self.bins, self.limits)
+            for run_period, ds_data_rp in ds_data.items()
+        }
+        ds_accmc_binned = {
+            run_period: ds_accmc_rp.bin_by(mass, self.bins, self.limits)
+            for run_period, ds_accmc_rp in ds_accmc.items()
+        }
+        return BinnedDatasets(data=ds_data_binned, accmc=ds_accmc_binned)
 
     def plot_fit(self, plot_path: Path, fit_result: FitResult) -> None:
         ureg = UnitRegistry()
@@ -828,29 +1018,28 @@ class Fit:
         s_waves = [wave for wave in fit_result.waves if wave.j == AngularMomentum.S]
         d_waves = [wave for wave in fit_result.waves if wave.j == AngularMomentum.D]
         ax_waves = [s_waves, d_waves]
-        corrected_yields = {
-            wave: Histogram.sum(
+        corrected_yields = {}
+        for wave in fit_result.waves + ['total']:
+            wave_key = str(wave) if isinstance(wave, Wave) else wave
+            corrected_yields[wave_key] = Histogram.sum(
                 [
                     fit_result.data_projection[run_period]
-                    * fit_result.genmc_projections[str(wave)][run_period]
+                    * fit_result.genmc_projections[wave_key][run_period]
                     / fit_result.projections['total'][run_period]
                     for run_period in RUN_PERIODS
                 ]
             )
-            for wave in fit_result.waves + ['total']
-        }
         flux_data = PSFluxData()
         total_luminosity = np.sum(flux_data.tagged_luminosity.counts)
         total_luminosity_error = np.sqrt(
             np.sum(np.power(flux_data.tagged_luminosity.errors, 2))
         )
         width = float(np.diff(fit_result.bin_edges)[0])
-        cross_sections = {
-            wave: y.scalar_div(total_luminosity, total_luminosity_error).scalar_div(
-                width
-            )
-            for wave, y in corrected_yields.items()
-        }
+        cross_sections = {}
+        for wave_key, hist in corrected_yields.items():
+            cross_sections[wave_key] = hist.scalar_div(
+                total_luminosity, total_luminosity_error
+            ).scalar_div(width)
         for i in [0, 1]:
             ax[i].stairs(
                 cross_sections['total'].counts,
@@ -958,7 +1147,11 @@ class Config:
 
     def run(self, variation: str) -> None:
         self.variations[variation].process_variation(
-            self.datasets, self.cuts, self.weights, self.plots, self.fits
+            self.datasets,
+            self.cuts,
+            self.weights,
+            self.plots,
+            self.fits,
         )
 
 

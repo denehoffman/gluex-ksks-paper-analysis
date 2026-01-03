@@ -115,7 +115,10 @@ class Wave:
 
     @property
     def amplitude_names(self) -> list[str]:
-        return [f'coeff {self}', f'{"ylm" if self.r is None else "zlm"} {self}']
+        names = [f'coeff {self}', f'{"ylm" if self.r is None else "zlm"} {self}']
+        if self.r is not None:
+            names.append(f'kappa {self}')
+        return names
 
 
 def build_model(waves: list[Wave]) -> ld.Expression:
