@@ -154,14 +154,37 @@ class PSFluxData:
         self.tagged_luminosity: Histogram
         self.tagh_flux: Histogram
         self.tagm_flux: Histogram
+        self.tagged_luminosity_by_run_period: dict[str, Histogram]
 
         if PSFLUX_DATA_PATH.exists():
+            payload = pickle.load(PSFLUX_DATA_PATH.open('rb'))  # noqa: S301
+            if isinstance(payload, dict):
+                self.tagged_flux = payload['tagged_flux']
+                self.tagged_luminosity = payload['tagged_luminosity']
+                self.tagh_flux = payload['tagh_flux']
+                self.tagm_flux = payload['tagm_flux']
+                self.tagged_luminosity_by_run_period = payload.get(
+                    'tagged_luminosity_by_run_period',
+                    payload.get('tagged_luminosity_by_run'),
+                )
+                if self.tagged_luminosity_by_run_period is None:
+                    logger.info('Recomputing per-run-period luminosity cache...')
+                    self.tagged_luminosity_by_run_period = (
+                        self._build_per_run_period_luminosity()
+                    )
+                    self._write_cache()
+                return
             (
                 self.tagged_flux,
                 self.tagged_luminosity,
                 self.tagh_flux,
                 self.tagm_flux,
-            ) = pickle.load(PSFLUX_DATA_PATH.open('rb'))  # noqa: S301
+            ) = payload
+            logger.info('Upgrading flux cache with per-run-period luminosities...')
+            self.tagged_luminosity_by_run_period = (
+                self._build_per_run_period_luminosity()
+            )
+            self._write_cache()
             return
         logger.info('Building flux cache...')
         (
@@ -169,22 +192,52 @@ class PSFluxData:
             self.tagged_luminosity,
             self.tagh_flux,
             self.tagm_flux,
+            self.tagged_luminosity_by_run_period,
         ) = self._build_from_db()
+        self._write_cache()
+
+    def _write_cache(self) -> None:
         PSFLUX_DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
         with PSFLUX_DATA_PATH.open('wb') as f:
             pickle.dump(
-                (
-                    self.tagged_flux,
-                    self.tagged_luminosity,
-                    self.tagh_flux,
-                    self.tagm_flux,
-                ),
+                {
+                    'tagged_flux': self.tagged_flux,
+                    'tagged_luminosity': self.tagged_luminosity,
+                    'tagh_flux': self.tagh_flux,
+                    'tagm_flux': self.tagm_flux,
+                    'tagged_luminosity_by_run_period': self.tagged_luminosity_by_run_period,
+                },
                 f,
                 protocol=pickle.HIGHEST_PROTOCOL,
             )
 
     @staticmethod
-    def _build_from_db() -> tuple[Histogram, Histogram, Histogram, Histogram]:
+    def _histogram_from_dict(data: dict[str, list[float]]) -> Histogram:
+        return Histogram(
+            data['counts'],
+            data['edges'],
+            data['errors'],
+        )
+
+    def _build_per_run_period_luminosity(self) -> dict[str, Histogram]:
+        per_run: dict[str, Histogram] = {}
+        for run_period, rest_version in REST_VERSIONS.items():
+            lumi_data = gluex_lumi.get_flux_histograms(
+                run_periods={run_period: rest_version},
+                edges=list(np.histogram_bin_edges([], 80, range=(8.0, 8.8))),
+                coherent_peak=True,
+                polarized=True,
+                rcdb=str(RCDB_CONNECTION),
+                ccdb=str(CCDB_CONNECTION),
+            )
+            per_run[run_period] = self._histogram_from_dict(
+                lumi_data.tagged_luminosity.as_dict()
+            )
+        return per_run
+
+    def _build_from_db(
+        self,
+    ) -> tuple[Histogram, Histogram, Histogram, Histogram, dict[str, Histogram]]:
         lumi_data = gluex_lumi.get_flux_histograms(
             run_periods=REST_VERSIONS,
             edges=list(np.histogram_bin_edges([], 80, range=(8.0, 8.8))),
@@ -198,26 +251,11 @@ class PSFluxData:
         tagh_flux_data = lumi_data.tagh_flux.as_dict()
         tagm_flux_data = lumi_data.tagm_flux.as_dict()
         return (
-            Histogram(
-                tagged_flux_data['counts'],
-                tagged_flux_data['edges'],
-                tagged_flux_data['errors'],
-            ),
-            Histogram(
-                tagged_luminosity_data['counts'],
-                tagged_luminosity_data['edges'],
-                tagged_luminosity_data['errors'],
-            ),
-            Histogram(
-                tagh_flux_data['counts'],
-                tagh_flux_data['edges'],
-                tagh_flux_data['errors'],
-            ),
-            Histogram(
-                tagm_flux_data['counts'],
-                tagm_flux_data['edges'],
-                tagm_flux_data['errors'],
-            ),
+            self._histogram_from_dict(tagged_flux_data),
+            self._histogram_from_dict(tagged_luminosity_data),
+            self._histogram_from_dict(tagh_flux_data),
+            self._histogram_from_dict(tagm_flux_data),
+            self._build_per_run_period_luminosity(),
         )
 
 

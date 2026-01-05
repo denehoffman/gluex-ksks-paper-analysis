@@ -37,6 +37,7 @@ from gluex_ksks_paper_analysis.environment import (
     RED,
     NORM,
     PLOTS_PATH,
+    REPORTS_PATH,
     RUN_PERIODS,
 )
 from gluex_ksks_paper_analysis.fit import (
@@ -413,6 +414,8 @@ class FitResult:
     data_projection: dict[str, Histogram]
     projections: dict[str, dict[str, Histogram]]
     genmc_projections: dict[str, dict[str, Histogram]]
+    genmc_counts: dict[str, Histogram]
+    accmc_counts: dict[str, Histogram]
 
     @property
     def bins(self) -> int:
@@ -455,6 +458,18 @@ class FitResult:
             out[wave] = tot
         return out
 
+    @cached_property
+    def accmc_total(self) -> Histogram:
+        return Histogram.sum(list(self.accmc_counts.values()))
+
+    @cached_property
+    def genmc_total(self) -> Histogram:
+        return Histogram.sum(list(self.genmc_counts.values()))
+
+    @cached_property
+    def acceptance(self) -> Histogram:
+        return self.accmc_total / self.genmc_total
+
 
 @dataclass
 class FitSummary:
@@ -472,6 +487,8 @@ class FitSummary:
 @dataclass
 class GeneratedMCProjections:
     genmc_projections: dict[str, dict[str, Histogram]]
+    genmc_counts: dict[str, Histogram]
+    accmc_counts: dict[str, Histogram]
 
 
 @dataclass
@@ -761,6 +778,14 @@ class Fit:
             run_period: Histogram.empty(self.bins, self.limits)
             for run_period in RUN_PERIODS
         }
+        genmc_counts = {
+            run_period: Histogram.empty(self.bins, self.limits)
+            for run_period in RUN_PERIODS
+        }
+        accmc_counts = {
+            run_period: Histogram.empty(self.bins, self.limits)
+            for run_period in RUN_PERIODS
+        }
         n_bootstraps = len(summary.bootstraps[0]) if summary.bootstraps else 0
         bootstrap_totals: dict[str, dict[str, NDArray]] | None = None
         if n_bootstraps > 0:
@@ -782,6 +807,13 @@ class Fit:
             ]
             for run_period in RUN_PERIODS
         }
+        for run_period in RUN_PERIODS:
+            for ibin in range(self.bins):
+                acc_bin = ds_accmc_binned[run_period][ibin]
+                accmc_counts[run_period].counts[ibin] = acc_bin.n_events_weighted
+                accmc_counts[run_period].errors[ibin] = np.sqrt(
+                    np.sum(np.power(acc_bin.weights, 2))
+                )
         genmc_dataset = datasets[self.genmc]
         for run_period in RUN_PERIODS:
             genmc_path = self._dataset_file_path(genmc_dataset, run_period)
@@ -817,6 +849,16 @@ class Fit:
                     nll_ibin = nll_cache[run_period][ibin]
                     result_ibin = summary.fits[ibin]
                     genmc_evaluator = model.load(ds_genmc_bin)
+                    genmc_counts[run_period].counts[ibin] += (
+                        ds_genmc_bin.n_events_weighted
+                    )
+                    genmc_err = np.sqrt(
+                        np.sum(np.power(ds_genmc_bin.weights, 2))
+                    )
+                    genmc_counts[run_period].errors[ibin] = np.sqrt(
+                        np.power(genmc_counts[run_period].errors[ibin], 2)
+                        + np.power(genmc_err, 2)
+                    )
                     genmc_projections['total'][run_period].counts[ibin] += np.sum(
                         nll_ibin.project(result_ibin.x, mc_evaluator=genmc_evaluator)
                     )
@@ -867,7 +909,11 @@ class Fit:
                         else:
                             err = 0.0
                         genmc_projections[label][run_period].errors[ibin] = err
-        return GeneratedMCProjections(genmc_projections)
+        return GeneratedMCProjections(
+            genmc_projections=genmc_projections,
+            genmc_counts=genmc_counts,
+            accmc_counts=accmc_counts,
+        )
 
     def _build_fit_result(
         self, summary: FitSummary, projections: GeneratedMCProjections
@@ -883,6 +929,8 @@ class Fit:
             data_projection=summary.data_projection,
             projections=summary.projections,
             genmc_projections=projections.genmc_projections,
+            genmc_counts=projections.genmc_counts,
+            accmc_counts=projections.accmc_counts,
         )
 
     def _render_plots(
@@ -899,11 +947,9 @@ class Fit:
             self.plot_fit(fit_plot, fit_result)
         else:
             logger.info(f'Skipping fit plot: {name}')
-        if not cross_section_plot.exists() and ld.mpi.is_root():
+        if ld.mpi.is_root():
             logger.info(f'Plotting cross-sections: {name}')
             self.plot_cross_sections(cross_section_plot, fit_result)
-        else:
-            logger.info(f'Skipping cross-section plot: {name}')
 
     def _fit_directory(self, name: str, datasets: dict[str, Dataset]) -> Path:
         fit_dir = FITS_PATH
@@ -1012,68 +1058,232 @@ class Fit:
     def plot_cross_sections(self, plot_path: Path, fit_result: FitResult) -> None:
         ureg = UnitRegistry()
         mass_unit = ureg.parse_units('GeV/c^2')
-        cross_section_unit = ureg.parse_units('pb/GeV')
+        cross_section_unit = ureg.parse_units('nb/GeV')
+        pb_to_nb = Quantity(1.0, 'pb').to('nb').m
         plt.style.use('gluex_ksks_paper_analysis.style')
-        _, ax = plt.subplots(nrows=1, ncols=2, sharey=True)
         s_waves = [wave for wave in fit_result.waves if wave.j == AngularMomentum.S]
         d_waves = [wave for wave in fit_result.waves if wave.j == AngularMomentum.D]
         ax_waves = [s_waves, d_waves]
-        corrected_yields = {}
-        for wave in fit_result.waves + ['total']:
-            wave_key = str(wave) if isinstance(wave, Wave) else wave
-            corrected_yields[wave_key] = Histogram.sum(
-                [
-                    fit_result.data_projection[run_period]
-                    * fit_result.genmc_projections[wave_key][run_period]
-                    / fit_result.projections['total'][run_period]
-                    for run_period in RUN_PERIODS
-                ]
-            )
         flux_data = PSFluxData()
         total_luminosity = np.sum(flux_data.tagged_luminosity.counts)
         total_luminosity_error = np.sqrt(
             np.sum(np.power(flux_data.tagged_luminosity.errors, 2))
         )
+        luminosity_by_run_period = {
+            run_period: (
+                np.sum(flux_data.tagged_luminosity_by_run_period[run_period].counts),
+                np.sqrt(
+                    np.sum(
+                        np.power(
+                            flux_data.tagged_luminosity_by_run_period[
+                                run_period
+                            ].errors,
+                            2,
+                        )
+                    )
+                ),
+            )
+            for run_period in RUN_PERIODS
+        }
         width = float(np.diff(fit_result.bin_edges)[0])
-        cross_sections = {}
+        corrected_yields: dict[str, Histogram] = {}
+        corrected_yields_by_run: dict[str, dict[str, Histogram]] = {}
+        for wave in fit_result.waves + ['total']:
+            wave_key = str(wave) if isinstance(wave, Wave) else wave
+            per_run = {}
+            for run_period in RUN_PERIODS:
+                per_run[run_period] = (
+                    fit_result.data_projection[run_period]
+                    * fit_result.genmc_projections[wave_key][run_period]
+                    / fit_result.projections['total'][run_period]
+                )
+            corrected_yields_by_run[wave_key] = per_run
+            corrected_yields[wave_key] = Histogram.sum(list(per_run.values()))
+        cross_sections_total: dict[str, Histogram] = {}
+        cross_sections_by_run: dict[str, dict[str, Histogram]] = {
+            run_period: {} for run_period in RUN_PERIODS
+        }
         for wave_key, hist in corrected_yields.items():
-            cross_sections[wave_key] = hist.scalar_div(
-                total_luminosity, total_luminosity_error
-            ).scalar_div(width)
-        for i in [0, 1]:
-            ax[i].stairs(
-                cross_sections['total'].counts,
-                cross_sections['total'].edges,
-                color=BLACK,
-                label='Total',
+            cross_sections_total[wave_key] = (
+                hist.scalar_div(total_luminosity)
+                .scalar_div(width)
+                .scalar_mul(pb_to_nb)
             )
-            ax[i].errorbar(
-                cross_sections['total'].centers,
-                cross_sections['total'].counts,
-                yerr=cross_sections['total'].errors,
-                ls='none',
-                color=BLACK,
-            )
-            for wave in ax_waves[i]:
-                color = (
-                    RED if wave.r is None or wave.r == Reflectivity.Positive else BLUE
+            for run_period in RUN_PERIODS:
+                lumi, _ = luminosity_by_run_period[run_period]
+                cross_sections_by_run[run_period][wave_key] = (
+                    corrected_yields_by_run[wave_key][run_period]
+                    .scalar_div(lumi)
+                    .scalar_div(width)
+                    .scalar_mul(pb_to_nb)
+                )
+
+        def render_cross_section_axes(ax: NDArray, cross_sections: dict[str, Histogram]):
+            for i in [0, 1]:
+                ax[i].stairs(
+                    cross_sections['total'].counts,
+                    cross_sections['total'].edges,
+                    color=BLACK,
+                    label='Total',
                 )
                 ax[i].errorbar(
-                    cross_sections[str(wave)].centers,
-                    cross_sections[str(wave)].counts,
-                    yerr=cross_sections[str(wave)].errors,
-                    linestyle='none',
-                    marker='o',
-                    markersize=2,
-                    color=color,
-                    label=wave.latex,
+                    cross_sections['total'].centers,
+                    cross_sections['total'].counts,
+                    yerr=cross_sections['total'].errors,
+                    ls='none',
+                    color=BLACK,
                 )
-            ax[i].legend()
-            ax[i].set_ylim(0)
-            ax[i].set_xlabel(f'Invariant Mass of $K_S^0K_S^0$ (${mass_unit:~L}$)')
+                for wave in ax_waves[i]:
+                    color = (
+                        RED
+                        if wave.r is None or wave.r == Reflectivity.Positive
+                        else BLUE
+                    )
+                    ax[i].errorbar(
+                        cross_sections[str(wave)].centers,
+                        cross_sections[str(wave)].counts,
+                        yerr=cross_sections[str(wave)].errors,
+                        linestyle='none',
+                        marker='o',
+                        markersize=2,
+                        color=color,
+                        label=wave.latex,
+                    )
+                ax[i].legend()
+                ax[i].set_ylim(0)
+                ax[i].set_xlabel(
+                    f'Invariant Mass of $K_S^0K_S^0$ (${mass_unit:~L}$)'
+                )
+
+        fig, ax = plt.subplots(nrows=1, ncols=2, sharey=True)
+        render_cross_section_axes(ax, cross_sections_total)
         ax[0].set_ylabel(f'${cross_section_unit:~L}$')
         logger.info(f'Saving plot: {plot_path}')
-        plt.savefig(plot_path)
+        fig.savefig(plot_path)
+        plt.close(fig)
+
+        acceptance_hist = fit_result.acceptance
+        acceptance_counts = np.nan_to_num(
+            acceptance_hist.counts, nan=0.0, posinf=0.0, neginf=0.0
+        )
+        acceptance_max = np.max(acceptance_counts) if acceptance_counts.size else 0.0
+        acceptance_ylim = acceptance_max * 1.1 if acceptance_max > 0 else 1.0
+        acceptance_plot = plot_path.with_name(f'{plot_path.stem}_acceptance.png')
+        fig_acc, ax_acc = plt.subplots(nrows=1, ncols=2, sharey=True)
+        render_cross_section_axes(ax_acc, cross_sections_total)
+        acceptance_handles = []
+        acceptance_axes = []
+        for axi in ax_acc:
+            twin = axi.twinx()
+            handle = twin.stairs(
+                acceptance_counts,
+                acceptance_hist.edges,
+                color=RED,
+                linewidth=1.5,
+                label='Acceptance',
+            )
+            twin.set_ylabel('Acceptance', color=RED)
+            twin.tick_params(axis='y', colors=RED)
+            twin.set_ylim(0, acceptance_ylim)
+            acceptance_handles.append(handle)
+            acceptance_axes.append(twin)
+        ax_acc[0].set_ylabel(f'${cross_section_unit:~L}$')
+        for twin, handle in zip(acceptance_axes, acceptance_handles):
+            twin.legend(handles=[handle], loc='upper right')
+        logger.info(f'Saving plot: {acceptance_plot}')
+        fig_acc.savefig(acceptance_plot)
+        plt.close(fig_acc)
+
+        for run_period in RUN_PERIODS:
+            run_plot = plot_path.with_name(f'{plot_path.stem}_{run_period}.png')
+            fig_run, ax_run = plt.subplots(nrows=1, ncols=2, sharey=True)
+            render_cross_section_axes(ax_run, cross_sections_by_run[run_period])
+            ax_run[0].set_ylabel(f'${cross_section_unit:~L}$')
+            logger.info(f'Saving plot: {run_plot}')
+            fig_run.savefig(run_plot)
+            plt.close(fig_run)
+
+        self._write_luminosity_table(
+            luminosity_by_run_period, total_luminosity, total_luminosity_error
+        )
+        self._write_cross_section_table(
+            plot_path,
+            cross_sections_by_run,
+            cross_sections_total,
+            width,
+        )
+
+    @staticmethod
+    def _integrated_cross_section(hist: Histogram, bin_width: float) -> tuple[float, float]:
+        total = float(np.sum(hist.counts * bin_width))
+        error = float(
+            np.sqrt(
+                np.sum(
+                    np.power(hist.errors * bin_width, 2),
+                )
+            )
+        )
+        return total, error
+
+    @staticmethod
+    def _write_latex_table(
+        path: Path,
+        headers: tuple[str, str, str],
+        rows: list[tuple[str, float, float]],
+        value_fmt: str,
+    ) -> None:
+        REPORTS_PATH.mkdir(parents=True, exist_ok=True)
+        with path.open('w') as f:
+            f.write('\\begin{tabular}{lrr}\n')
+            f.write(f'{headers[0]} & {headers[1]} & {headers[2]} \\\\\n')
+            f.write('\\hline\n')
+            for label, value, error in rows:
+                f.write(f'{label} & {value:{value_fmt}} & {error:{value_fmt}} \\\\\n')
+            f.write('\\end{tabular}\n')
+
+    def _write_luminosity_table(
+        self,
+        luminosity_by_run_period: dict[str, tuple[float, float]],
+        total_luminosity: float,
+        total_luminosity_error: float,
+    ) -> None:
+        rows = [
+            (run_period, lumi, err)
+            for run_period, (lumi, err) in luminosity_by_run_period.items()
+        ]
+        rows.append(('All', total_luminosity, total_luminosity_error))
+        headers = (
+            'Run Period',
+            r'Luminosity (pb$^{-1}$)',
+            r'Uncertainty (pb$^{-1}$)',
+        )
+        path = REPORTS_PATH / 'luminosity_summary.tex'
+        self._write_latex_table(path, headers, rows, value_fmt='.3e')
+
+    def _write_cross_section_table(
+        self,
+        plot_path: Path,
+        cross_sections_by_run: dict[str, dict[str, Histogram]],
+        cross_sections_total: dict[str, Histogram],
+        bin_width: float,
+    ) -> None:
+        rows: list[tuple[str, float, float]] = []
+        for run_period in RUN_PERIODS:
+            total, error = self._integrated_cross_section(
+                cross_sections_by_run[run_period]['total'], bin_width
+            )
+            rows.append((run_period, total, error))
+        total_all, error_all = self._integrated_cross_section(
+            cross_sections_total['total'], bin_width
+        )
+        rows.append(('All', total_all, error_all))
+        headers = (
+            'Run Period',
+            r'$\sigma_{\mathrm{tot}}$ (nb)',
+            'Uncertainty (nb)',
+        )
+        path = REPORTS_PATH / f'{plot_path.stem}_totals.tex'
+        self._write_latex_table(path, headers, rows, value_fmt='.3f')
 
 
 @dataclass(frozen=True)

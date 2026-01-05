@@ -135,7 +135,13 @@ def download_data() -> None:
         for rp in POL_HIST_PATHS
         if not POL_HIST_PATHS[rp].exists()
     ]
-    if remote_data_paths or remote_pol_hist_paths:
+    skip_rcdb = (
+        PSFLUX_DATA_PATH.exists()
+        and POLARIZED_RUN_NUMBERS_PATH.exists()
+        and POLARIZATION_DATA_PATH.exists()
+    ) or RCDB_CONNECTION.exists()
+    skip_ccdb = (PSFLUX_DATA_PATH.exists()) or CCDB_CONNECTION.exists()
+    if remote_data_paths or remote_pol_hist_paths or (not skip_rcdb) or (not skip_ccdb):
         print(
             'Some required data files were missing and need to be downloaded from ernest.phys.cmu.edu'
         )
@@ -143,12 +149,6 @@ def download_data() -> None:
         download_map = []
         if remote_pol_hist_paths:
             download_map.append((remote_pol_hist_paths, DATABASE_PATH))
-        skip_rcdb = (
-            PSFLUX_DATA_PATH.exists()
-            and POLARIZED_RUN_NUMBERS_PATH.exists()
-            and POLARIZATION_DATA_PATH.exists()
-        ) or RCDB_CONNECTION.exists()
-        skip_ccdb = (PSFLUX_DATA_PATH.exists()) or CCDB_CONNECTION.exists()
         if not skip_rcdb:
             download_map.append((remote_dir / 'rcdb.sqlite', RCDB_CONNECTION))
         if not skip_ccdb:
