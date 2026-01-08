@@ -1,5 +1,9 @@
+[cuts.polarization]
+rules = ["pol_magnitude <= 0.0"]
+cache = true
+
 [cuts.standard]
-rules = ["ChiSqDOF >= 3.0", "Proton_Z <= 50.0", "Proton_Z >= 80.0", "m_meson >= 2.0", "ksb_costheta < 0.0"]
+rules = ["ChiSqDOF >= 3.0", "Proton_Z <= 50.0", "Proton_Z >= 80.0", "m_meson >= 2.0", "ksb_costheta < 0.0", "pol_magnitude <= 0.0"]
 cache = true
 
 [cuts.mandelstam_low_t]
@@ -96,6 +100,10 @@ steps  = ["accid", "standard", "mandelstam_high_t"]
 [datasets.accmc_very_high_t]
 source = "sigmc"
 steps  = ["accid", "standard", "mandelstam_very_high_t"]
+
+[datasets.genmc]
+source = "genmc"
+steps = ["polarization"]
 
 [fits.spd2p]
 waves = ["S+0+", "D+2+"]

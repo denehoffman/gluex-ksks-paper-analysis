@@ -444,7 +444,7 @@ VARIABLE_MAPPINGS: dict[str, Callable[[pl.LazyFrame], pl.LazyFrame]] = {
 
 
 def add_variable(name: str, df: pl.LazyFrame) -> pl.LazyFrame:
-    if name in df:
+    if name in df.collect_schema().names():
         return df
     mapping = VARIABLE_MAPPINGS.get(name)
     if mapping is not None:

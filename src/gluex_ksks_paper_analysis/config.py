@@ -10,7 +10,7 @@ from functools import cached_property
 from functools import reduce
 from importlib import resources
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 import laddu as ld
 import matplotlib.pyplot as plt
@@ -357,49 +357,84 @@ class Dataset:
     source: str
     steps: list[str]
 
-    def df(
-        self, run_period: str, cuts: dict[str, Cut], weights: dict[str, Weight]
+    def dataset(
+        self,
+        run_period: str,
+        config: Config,
+        *,
+        p4s: list[str] | None = None,
+        aux: list[str] | None = None,
+    ) -> ld.Dataset:
+        return ld.io.read_parquet(
+            self._generate_path_from_steps(run_period, self.steps, config),
+            p4s=p4s,
+            aux=aux,
+        )
+
+    def generate_path(self, run_period: str, config: Config) -> Path:
+        return self._generate_path_from_steps(run_period, self.steps, config)
+
+    def _get_path(self, run_period: str, steps: list[str]) -> Path:
+        p = DATASET_PATH
+        for step in steps:
+            p /= step
+        p /= f'{self.source}_{run_period}.parquet'
+        return p
+
+    def _generate_path_from_steps(
+        self, run_period: str, steps: list[str], config: Config
+    ) -> Path:
+        _ = self._get_lazyframe_from_steps(run_period, steps, config)
+        return self._get_path(run_period, steps)
+
+    def _get_lazyframe_from_steps(
+        self, run_period: str, steps: list[str], config: Config
     ) -> pl.LazyFrame:
+        path = self._get_path(run_period, steps)
+        logger.debug(f'Searching for dataset: {path}')
+        if path.exists():
+            return pl.scan_parquet(path)
+        df = self._get_lazyframe_from_steps(run_period, steps[:-1], config)
+        last_step = steps[-1]
+        if last_step in config.cuts and last_step in config.weights:
+            msg = f'Ambiguous step {last_step} (both a cut and a weight)'
+            raise ConfigError(msg)
+        if cut := config.cuts.get(last_step):
+            df = cut.apply(df)
+            all_columns = set(df.collect_schema().names())
+            columns = [c for c in _BASE_COLUMNS if c in all_columns]
+            if {'pol_magnitude', 'pol_angle'} <= all_columns:
+                columns += ['pol_magnitude', 'pol_angle']
+
+            if cut.cache and ld.mpi.is_root():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                df.select(columns).sink_parquet(path)
+            return df
+        if weight := config.weights.get(last_step):
+            ds_sigmc = Dataset('sigmc', steps[:-1])
+            ds_bkgmc = Dataset('bkgmc', steps[:-1])
+            is_mc = self.source != 'data'
+            df = weight.apply(
+                df,
+                ds_sigmc.lazyframe(run_period, config),
+                ds_bkgmc.lazyframe(run_period, config),
+                is_mc,
+            )
+            all_columns = set(df.collect_schema().names())
+            columns = [c for c in _BASE_COLUMNS if c in all_columns]
+            if {'pol_magnitude', 'pol_angle'} <= all_columns:
+                columns += ['pol_magnitude', 'pol_angle']
+            if weight.cache and ld.mpi.is_root():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                df.select(columns).sink_parquet(path)
+            return df
+        else:
+            msg = f'Failed to find {last_step} in either cuts or weights'
+            raise ConfigError(msg)
+
+    def lazyframe(self, run_period: str, config: Config) -> pl.LazyFrame:
         logger.debug(f'Fetching dataset: {self.source} [{run_period}] ({self.steps})')
-
-        def get_from_steps(steps: list[str]) -> pl.LazyFrame:
-            path = DATASET_PATH
-            for step in steps:
-                path /= step
-            path /= f'{self.source}_{run_period}.parquet'
-            logger.debug(f'Searching for dataset: {path}')
-            if path.exists():
-                return pl.scan_parquet(path)
-            df = get_from_steps(steps[:-1])
-            last_step = steps[-1]
-            if last_step in cuts and last_step in weights:
-                msg = f'Ambiguous step {last_step} (both a cut and a weight)'
-                raise ConfigError(msg)
-            if cut := cuts.get(last_step):
-                df = cut.apply(df)
-                if cut.cache and ld.mpi.is_root():
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    df.select(_BASE_COLUMNS).sink_parquet(path)
-                return df
-            if weight := weights.get(last_step):
-                ds_sigmc = Dataset('sigmc', steps[:-1])
-                ds_bkgmc = Dataset('bkgmc', steps[:-1])
-                is_mc = self.source != 'data'
-                df = weight.apply(
-                    df,
-                    ds_sigmc.df(run_period, cuts, weights),
-                    ds_bkgmc.df(run_period, cuts, weights),
-                    is_mc,
-                )
-                if weight.cache and ld.mpi.is_root():
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    df.select(_BASE_COLUMNS).sink_parquet(path)
-                return df
-            else:
-                msg = f'Failed to find {last_step} in either cuts or weights'
-                raise ConfigError(msg)
-
-        return get_from_steps(self.steps)
+        return self._get_lazyframe_from_steps(run_period, self.steps, config)
 
 
 @dataclass
@@ -553,36 +588,56 @@ class Fit:
         ]
     )
     genmc_batch_size: int = 10_000_000
+    reference_parameter: str | None = 'S+0+ real'
+    reference_value: float = 100.0
+
+    @staticmethod
+    def _align_parameters(
+        parameters: NDArray[np.float64],
+        parameter_names: Sequence[str] | None,
+        target_order: Sequence[str],
+    ) -> NDArray[np.float64]:
+        if parameter_names is None:
+            msg = 'Missing parameter names for fit result; rerun the fit with the current code.'
+            raise ValueError(msg)
+        values = np.asarray(parameters, dtype=float)
+        lookup = {name: values[i] for i, name in enumerate(parameter_names)}
+        aligned: list[float] = []
+        missing: list[str] = []
+        for name in target_order:
+            if name not in lookup:
+                missing.append(name)
+                continue
+            aligned.append(lookup[name])
+        if missing:
+            msg = f'Missing parameter values for: {", ".join(missing)}'
+            raise ValueError(msg)
+        return np.asarray(aligned, dtype=float)
 
     def fit(
         self,
         name: str,
-        datasets: dict[str, Dataset],
-        cuts: dict[str, Cut],
-        weights: dict[str, Weight],
+        config: Config,
     ) -> None:
         summary, preloaded_binned = self._ensure_fit_summary(
-            name, datasets, cuts, weights
+            name,
+            config,
         )
         genmc_projections = self._ensure_genmc_projections(
             name,
             summary,
-            datasets,
-            cuts,
-            weights,
+            config,
             preloaded_binned,
         )
         fit_result = self._build_fit_result(summary, genmc_projections)
-        self._render_plots(name, datasets, fit_result)
+        self._render_plots(name, config, fit_result)
 
     def fit_waves(
         self,
-        datasets: dict[str, Dataset],
-        cuts: dict[str, Cut],
-        weights: dict[str, Weight],
+        config: Config,
         seed: int = 0,
     ) -> tuple[FitSummary, BinnedDatasets]:
-        binned_datasets = self._load_binned_datasets(datasets, cuts, weights)
+        binned_datasets = self._load_binned_datasets(config)
         ds_data_binned = binned_datasets.data
         ds_accmc_binned = binned_datasets.accmc
         waves = [Wave(w) for w in self.waves]
@@ -593,20 +648,30 @@ class Fit:
         for ibin in trange(self.bins, desc='Bins', position=0, leave=True):
             nlls_ibin = [
                 ld.NLL(
-                    model,
+                    model
+                    * ld.Scalar(
+                        f'scale {run_period}', ld.parameter(f'scale {run_period}')
+                    ),
                     ds_data_binned[run_period][ibin],
                     ds_accmc_binned[run_period][ibin],
                 ).to_expression()
                 for run_period in RUN_PERIODS
             ]
-            nll_ibin = ld.likelihood_sum(nlls_ibin).load()
+            nll_ibin = ld.likelihood_sum(nlls_ibin).fix('S+0+ real', 100.0).load()
             best_fit_ibin = None
             for _ in trange(
                 self.n_iterations, desc='Iterations', position=1, leave=False
             ):
-                p0 = rng.uniform(-100.0, 100.0, len(nll_ibin.parameters))
-                res = nll_ibin.minimize(p0, settings={'skip_hessian': True})
-                res = nll_ibin.minimize(res.x, method='nelder-mead')
+                free_params = nll_ibin.free_parameters
+                p0 = rng.uniform(-100.0, 100.0, len(free_params))
+                bounds = [(None, None)] * len(free_params)
+                for i_param, name in enumerate(free_params):
+                    if name.startswith('scale'):
+                        p0[i_param] = rng.uniform(1_000_000.0, 6_000_000.0)
+                        bounds[i_param] = (0.0, None)
+                res = nll_ibin.minimize(
+                    p0, settings={'skip_hessian': True}, bounds=bounds
+                )
                 if best_fit_ibin is None or res.fx < best_fit_ibin.fx:
                     best_fit_ibin = res
             if best_fit_ibin is None:
@@ -619,18 +684,23 @@ class Fit:
             ):
                 nlls_iboot = [
                     ld.NLL(
-                        model,
+                        model
+                        * ld.Scalar(
+                            f'scale {run_period}', ld.parameter(f'scale {run_period}')
+                        ),
                         ds_data_binned[run_period][ibin].bootstrap(iboot),
                         ds_accmc_binned[run_period][ibin],
                     ).to_expression()
                     for run_period in RUN_PERIODS
                 ]
-                nll_iboot = ld.likelihood_sum(nlls_iboot).load()
+                nll_iboot = ld.likelihood_sum(nlls_iboot).fix('S+0+ real', 100.0).load()
+                free_params = nll_iboot.free_parameters
+                bounds = [(None, None)] * len(free_params)
+                for i_param, name in enumerate(free_params):
+                    if name.startswith('scale '):
+                        bounds[i_param] = (0.0, None)
                 bootstrap_res = nll_iboot.minimize(
-                    best_fit_ibin.x, settings={'skip_hessian': True}
-                )
-                bootstrap_res = nll_iboot.minimize(
-                    bootstrap_res.x, method='nelder-mead'
+                    best_fit_ibin.x, settings={'skip_hessian': True}, bounds=bounds
                 )
                 bootstraps_ibin.append(bootstrap_res)
             bootstraps.append(bootstraps_ibin)
@@ -654,19 +724,46 @@ class Fit:
         for ibin in trange(self.bins, desc='Bins'):
             for run_period in RUN_PERIODS:
                 nll_ibin = ld.NLL(
-                    model,
+                    model
+                    * ld.Scalar(
+                        f'scale {run_period}', ld.parameter(f'scale {run_period}')
+                    ),
                     ds_data_binned[run_period][ibin],
                     ds_accmc_binned[run_period][ibin],
-                )
+                ).fix('S+0+ real', 100.0)
                 result_ibin = best_fits[ibin]
+                result_params = self._align_parameters(
+                    result_ibin.x,
+                    result_ibin.parameter_names,
+                    nll_ibin.free_parameters,
+                )
                 bootstraps_ibin = bootstraps[ibin]
                 projections['total'][run_period].counts[ibin] = np.sum(
-                    nll_ibin.project(result_ibin.x)
+                    nll_ibin.project(result_params)
                 )
+                boot_nlls_ibin = [
+                    ld.NLL(
+                        model
+                        * ld.Scalar(
+                            f'scale {run_period}', ld.parameter(f'scale {run_period}')
+                        ),
+                        ds_data_binned[run_period][ibin].bootstrap(iboot),
+                        ds_accmc_binned[run_period][ibin],
+                    ).fix('S+0+ real', 100.0)
+                    for iboot in range(len(bootstraps_ibin))
+                ]
                 projections['total'][run_period].errors[ibin] = np.std(
                     [
-                        np.sum(nll_ibin.project(bootstrap.x))
-                        for bootstrap in bootstraps_ibin
+                        np.sum(
+                            boot_nlls_ibin[iboot].project(
+                                self._align_parameters(
+                                    bootstrap.x,
+                                    bootstrap.parameter_names,
+                                    nll_ibin.free_parameters,
+                                )
+                            )
+                        )
+                        for iboot, bootstrap in enumerate(bootstraps_ibin)
                     ],
                     ddof=1,
                 )
@@ -676,22 +773,27 @@ class Fit:
                 data_projection[run_period].errors[ibin] = np.sqrt(
                     np.sum(np.power(ds_data_binned[run_period][ibin].weights, 2))
                 )
+                scale_name = f'scale {run_period}'
                 for wave in waves:
                     projections[str(wave)][run_period].counts[ibin] = np.sum(
                         nll_ibin.project_with(
-                            result_ibin.x,
-                            wave.amplitude_names,
+                            result_params,
+                            wave.amplitude_names + [scale_name],
                         )
                     )
                     projections[str(wave)][run_period].errors[ibin] = np.std(
                         [
                             np.sum(
-                                nll_ibin.project_with(
-                                    bootstrap.x,
-                                    wave.amplitude_names,
+                                boot_nlls_ibin[iboot].project_with(
+                                    self._align_parameters(
+                                        bootstrap.x,
+                                        bootstrap.parameter_names,
+                                        nll_ibin.free_parameters,
+                                    ),
+                                    wave.amplitude_names + [scale_name],
                                 )
                             )
-                            for bootstrap in bootstraps_ibin
+                            for iboot, bootstrap in enumerate(bootstraps_ibin)
                         ],
                         ddof=1,
                     )
@@ -713,16 +815,14 @@ class Fit:
     def _ensure_fit_summary(
         self,
         name: str,
-        datasets: dict[str, Dataset],
-        cuts: dict[str, Cut],
-        weights: dict[str, Weight],
+        config: Config,
     ) -> tuple[FitSummary, BinnedDatasets | None]:
-        summary_path = self._summary_path(name, datasets)
+        summary_path = self._summary_path(name, config.datasets)
         if summary_path.exists():
             logger.info(f'Loading fit summary: {name}')
             return pickle.load(summary_path.open('rb')), None
         logger.info(f'Running fit: {name}')
-        summary, binned = self.fit_waves(datasets, cuts, weights)
+        summary, binned = self.fit_waves(config)
         if ld.mpi.is_root():
             summary_path.parent.mkdir(parents=True, exist_ok=True)
             pickle.dump(summary, summary_path.open('wb'))
@@ -732,19 +832,15 @@ class Fit:
         self,
         name: str,
         summary: FitSummary,
-        datasets: dict[str, Dataset],
-        cuts: dict[str, Cut],
-        weights: dict[str, Weight],
+        config: Config,
         preloaded_binned: BinnedDatasets | None,
     ) -> GeneratedMCProjections:
-        projection_path = self._genmc_projection_path(name, datasets)
+        projection_path = self._genmc_projection_path(name, config.datasets)
         if projection_path.exists():
             logger.info(f'Loading generated MC projections: {name}')
             return pickle.load(projection_path.open('rb'))
         logger.info(f'Projecting generated MC: {name}')
-        projections = self.project_generated_mc(
-            summary, datasets, cuts, weights, preloaded_binned
-        )
+        projections = self.project_generated_mc(summary, config, preloaded_binned)
         if ld.mpi.is_root():
             projection_path.parent.mkdir(parents=True, exist_ok=True)
             pickle.dump(projections, projection_path.open('wb'))
@@ -753,19 +849,27 @@ class Fit:
     def project_generated_mc(
         self,
         summary: FitSummary,
-        datasets: dict[str, Dataset],
-        cuts: dict[str, Cut],
-        weights: dict[str, Weight],
+        config: Config,
         preloaded_binned: BinnedDatasets | None,
     ) -> GeneratedMCProjections:
         if preloaded_binned is None:
-            binned = self._load_binned_datasets(datasets, cuts, weights)
+            binned = self._load_binned_datasets(config)
         else:
             binned = preloaded_binned
         ds_data_binned = binned.data
         ds_accmc_binned = binned.accmc
         waves = summary.waves
-        model = build_model(waves)
+        shape_model = build_model(waves)
+        scaled_models = {
+            run_period: (
+                shape_model
+                * ld.Scalar(
+                    f'scale {run_period}',
+                    ld.parameter(f'scale {run_period}'),
+                )
+            ).fix('S+0+ real', 100.0)
+            for run_period in RUN_PERIODS
+        }
         mass = ld.Mass(['kshort1', 'kshort2'])
         genmc_projections: dict[str, dict[str, Histogram]] = {
             str(wave): {
@@ -799,10 +903,30 @@ class Fit:
         nll_cache = {
             run_period: [
                 ld.NLL(
-                    model,
+                    shape_model
+                    * ld.Scalar(
+                        f'scale {run_period}', ld.parameter(f'scale {run_period}')
+                    ),
                     ds_data_binned[run_period][ibin],
                     ds_accmc_binned[run_period][ibin],
-                )
+                ).fix('S+0+ real', 100.0)
+                for ibin in range(self.bins)
+            ]
+            for run_period in RUN_PERIODS
+        }
+        bootstrap_nlls_cache = {
+            run_period: [
+                [
+                    ld.NLL(
+                        shape_model
+                        * ld.Scalar(
+                            f'scale {run_period}', ld.parameter(f'scale {run_period}')
+                        ),
+                        ds_data_binned[run_period][ibin].bootstrap(iboot),
+                        ds_accmc_binned[run_period][ibin],
+                    ).fix('S+0+ real', 100.0)
+                    for iboot in range(n_bootstraps)
+                ]
                 for ibin in range(self.bins)
             ]
             for run_period in RUN_PERIODS
@@ -814,9 +938,9 @@ class Fit:
                 accmc_counts[run_period].errors[ibin] = np.sqrt(
                     np.sum(np.power(acc_bin.weights, 2))
                 )
-        genmc_dataset = datasets[self.genmc]
+        genmc_dataset = config.datasets[self.genmc]
         for run_period in RUN_PERIODS:
-            genmc_path = self._dataset_file_path(genmc_dataset, run_period)
+            genmc_path = genmc_dataset.generate_path(run_period, config)
             if not genmc_path.exists():
                 logger.warning(f'Missing generated MC file: {genmc_path}')
                 continue
@@ -835,11 +959,13 @@ class Fit:
                     continue
                 df = pl.from_arrow(batch)
                 assert isinstance(df, pl.DataFrame)
-                lf = add_variable('polarization', df.lazy())
-                chunk_df = lf.select(self.required_columns_genmc).collect()
-                if chunk_df.is_empty():
+                if df.is_empty():
                     continue
-                ds_chunk = ld.Dataset.from_polars(chunk_df)
+                ds_chunk = ld.io.from_polars(
+                    df,
+                    p4s=['beam', 'proton', 'kshort1', 'kshort2'],
+                    aux=['pol_magnitude', 'pol_angle'],
+                )
                 chunk_binned = ds_chunk.bin_by(mass, self.bins, self.limits)
                 filled_bins = 0
                 for ibin, ds_genmc_bin in enumerate(chunk_binned):  # ty:ignore[invalid-argument-type]
@@ -847,46 +973,62 @@ class Fit:
                         continue
                     filled_bins += 1
                     nll_ibin = nll_cache[run_period][ibin]
+                    bootstrap_nlls_ibin = bootstrap_nlls_cache[run_period][ibin]
                     result_ibin = summary.fits[ibin]
-                    genmc_evaluator = model.load(ds_genmc_bin)
+                    result_params = self._align_parameters(
+                        result_ibin.x,
+                        result_ibin.parameter_names,
+                        nll_ibin.free_parameters,
+                    )
+                    scale_name = f'scale {run_period}'
+                    genmc_evaluator = scaled_models[run_period].load(ds_genmc_bin)
                     genmc_counts[run_period].counts[ibin] += (
                         ds_genmc_bin.n_events_weighted
                     )
-                    genmc_err = np.sqrt(
-                        np.sum(np.power(ds_genmc_bin.weights, 2))
-                    )
+                    genmc_err = np.sqrt(np.sum(np.power(ds_genmc_bin.weights, 2)))
                     genmc_counts[run_period].errors[ibin] = np.sqrt(
                         np.power(genmc_counts[run_period].errors[ibin], 2)
                         + np.power(genmc_err, 2)
                     )
                     genmc_projections['total'][run_period].counts[ibin] += np.sum(
-                        nll_ibin.project(result_ibin.x, mc_evaluator=genmc_evaluator)
+                        nll_ibin.project(result_params, mc_evaluator=genmc_evaluator)
                     )
                     if bootstrap_totals is not None:
                         for iboot, bootstrap in enumerate(summary.bootstraps[ibin]):
+                            bootstrap_params = self._align_parameters(
+                                bootstrap.x,
+                                bootstrap.parameter_names,
+                                nll_ibin.free_parameters,
+                            )
                             bootstrap_totals['total'][run_period][ibin, iboot] += (
                                 np.sum(
                                     nll_ibin.project(
-                                        bootstrap.x, mc_evaluator=genmc_evaluator
+                                        bootstrap_params,
+                                        mc_evaluator=genmc_evaluator,
                                     )
                                 )
                             )
                     for wave in waves:
                         genmc_projections[str(wave)][run_period].counts[ibin] += np.sum(
                             nll_ibin.project_with(
-                                result_ibin.x,
-                                wave.amplitude_names,
+                                result_params,
+                                wave.amplitude_names + [scale_name],
                                 mc_evaluator=genmc_evaluator,
                             )
                         )
                         if bootstrap_totals is not None:
                             for iboot, bootstrap in enumerate(summary.bootstraps[ibin]):
+                                bootstrap_params = self._align_parameters(
+                                    bootstrap.x,
+                                    bootstrap.parameter_names,
+                                    nll_ibin.free_parameters,
+                                )
                                 bootstrap_totals[str(wave)][run_period][
                                     ibin, iboot
                                 ] += np.sum(
-                                    nll_ibin.project_with(
-                                        bootstrap.x,
-                                        wave.amplitude_names,
+                                    bootstrap_nlls_ibin[iboot].project_with(
+                                        bootstrap_params,
+                                        wave.amplitude_names + [scale_name],
                                         mc_evaluator=genmc_evaluator,
                                     )
                                 )
@@ -895,7 +1037,7 @@ class Fit:
                 row_bar.set_postfix(
                     {
                         'chunks': chunk_idx,
-                        'rows': chunk_df.height,
+                        'rows': df.height,
                         'bins': filled_bins,
                     }
                 )
@@ -933,11 +1075,9 @@ class Fit:
             accmc_counts=projections.accmc_counts,
         )
 
-    def _render_plots(
-        self, name: str, datasets: dict[str, Dataset], fit_result: FitResult
-    ) -> None:
+    def _render_plots(self, name: str, config: Config, fit_result: FitResult) -> None:
         plot_dir = PLOTS_PATH
-        for step in datasets[self.data].steps:
+        for step in config.datasets[self.data].steps:
             plot_dir /= step
         plot_dir.mkdir(parents=True, exist_ok=True)
         fit_plot = plot_dir / f'{name}.png'
@@ -963,36 +1103,26 @@ class Fit:
     def _genmc_projection_path(self, name: str, datasets: dict[str, Dataset]) -> Path:
         return self._fit_directory(name, datasets) / 'genmc_projections.pkl'
 
-    def _dataset_file_path(self, dataset: Dataset, run_period: str) -> Path:
-        path = DATASET_PATH
-        for step in dataset.steps:
-            path /= step
-        return path / f'{dataset.source}_{run_period}.parquet'
-
     def _load_binned_datasets(
         self,
-        datasets: dict[str, Dataset],
-        cuts: dict[str, Cut],
-        weights: dict[str, Weight],
+        config: Config,
     ) -> BinnedDatasets:
         mass = ld.Mass(['kshort1', 'kshort2'])
         ds_data = {
-            run_period: ld.Dataset.from_polars(
-                add_variable(
-                    'polarization', datasets[self.data].df(run_period, cuts, weights)
-                )
-                .select(self.required_columns)
-                .collect()
+            run_period: config.datasets[self.data].dataset(
+                run_period,
+                config,
+                p4s=['beam', 'proton', 'kshort1', 'kshort2'],
+                aux=['pol_magnitude', 'pol_angle'],
             )
             for run_period in RUN_PERIODS
         }
         ds_accmc = {
-            run_period: ld.Dataset.from_polars(
-                add_variable(
-                    'polarization', datasets[self.accmc].df(run_period, cuts, weights)
-                )
-                .select(self.required_columns)
-                .collect()
+            run_period: config.datasets[self.accmc].dataset(
+                run_period,
+                config,
+                p4s=['beam', 'proton', 'kshort1', 'kshort2'],
+                aux=['pol_magnitude', 'pol_angle'],
             )
             for run_period in RUN_PERIODS
         }
@@ -1105,9 +1235,7 @@ class Fit:
         }
         for wave_key, hist in corrected_yields.items():
             cross_sections_total[wave_key] = (
-                hist.scalar_div(total_luminosity)
-                .scalar_div(width)
-                .scalar_mul(pb_to_nb)
+                hist.scalar_div(total_luminosity).scalar_div(width).scalar_mul(pb_to_nb)
             )
             for run_period in RUN_PERIODS:
                 lumi, _ = luminosity_by_run_period[run_period]
@@ -1118,7 +1246,9 @@ class Fit:
                     .scalar_mul(pb_to_nb)
                 )
 
-        def render_cross_section_axes(ax: NDArray, cross_sections: dict[str, Histogram]):
+        def render_cross_section_axes(
+            ax: NDArray, cross_sections: dict[str, Histogram]
+        ):
             for i in [0, 1]:
                 ax[i].stairs(
                     cross_sections['total'].counts,
@@ -1151,9 +1281,7 @@ class Fit:
                     )
                 ax[i].legend()
                 ax[i].set_ylim(0)
-                ax[i].set_xlabel(
-                    f'Invariant Mass of $K_S^0K_S^0$ (${mass_unit:~L}$)'
-                )
+                ax[i].set_xlabel(f'Invariant Mass of $K_S^0K_S^0$ (${mass_unit:~L}$)')
 
         fig, ax = plt.subplots(nrows=1, ncols=2, sharey=True)
         render_cross_section_axes(ax, cross_sections_total)
@@ -1214,7 +1342,9 @@ class Fit:
         )
 
     @staticmethod
-    def _integrated_cross_section(hist: Histogram, bin_width: float) -> tuple[float, float]:
+    def _integrated_cross_section(
+        hist: Histogram, bin_width: float
+    ) -> tuple[float, float]:
         total = float(np.sum(hist.counts * bin_width))
         error = float(
             np.sqrt(
@@ -1291,15 +1421,9 @@ class Plots:
     dataset: str
     items: list[str]
 
-    def make_plots(
-        self,
-        datasets: dict[str, Dataset],
-        cuts: dict[str, Cut],
-        weights: dict[str, Weight],
-        plots: dict[str, Plot1D | Plot2D],
-    ) -> None:
-        ds = datasets[self.dataset]
-        plots1d = {k: v for k, v in plots.items() if isinstance(v, Plot1D)}
+    def make_plots(self, config: Config) -> None:
+        ds = config.datasets[self.dataset]
+        plots1d = {k: v for k, v in config.plots.items() if isinstance(v, Plot1D)}
 
         def build_path(steps: list[str], source: str, plot_name: str) -> Path:
             path = PLOTS_PATH
@@ -1309,9 +1433,9 @@ class Plots:
 
         def render_for(dataset: Dataset) -> None:
             dataframes = [
-                dataset.df(run_period, cuts, weights) for run_period in RUN_PERIODS
+                dataset.lazyframe(run_period, config) for run_period in RUN_PERIODS
             ]
-            for name, plot in plots.items():
+            for name, plot in config.plots.items():
                 plot_path = build_path(dataset.steps, dataset.source, name)
                 if plot_path.exists():
                     logger.info(f'Plot already exists: {plot_path}, skipping')
@@ -1332,18 +1456,11 @@ class Variation:
     plots: list[Plots]
     fits: list[str]
 
-    def process_variation(
-        self,
-        datasets: dict[str, Dataset],
-        cuts: dict[str, Cut],
-        weights: dict[str, Weight],
-        plots: dict[str, Plot1D | Plot2D],
-        fits: dict[str, Fit],
-    ) -> None:
+    def process_variation(self, config: Config) -> None:
         for plot_set in self.plots:
-            plot_set.make_plots(datasets, cuts, weights, plots)
+            plot_set.make_plots(config)
         for fit in self.fits:
-            fits[fit].fit(fit, datasets, cuts, weights)
+            config.fits[fit].fit(fit, config)
 
 
 @dataclass(frozen=True)
@@ -1356,13 +1473,7 @@ class Config:
     variations: dict[str, Variation]
 
     def run(self, variation: str) -> None:
-        self.variations[variation].process_variation(
-            self.datasets,
-            self.cuts,
-            self.weights,
-            self.plots,
-            self.fits,
-        )
+        self.variations[variation].process_variation(self)
 
 
 class ConfigError(Exception):
@@ -1468,7 +1579,8 @@ def load_config(path: str | Path) -> Config:
         k: Dataset(source=v['source'], steps=list(v.get('steps', [])))
         for k, v in raw['datasets'].items()
     }
-    datasets['genmc'] = Dataset(source='genmc', steps=[])
+    if 'genmc' not in datasets:
+        datasets['genmc'] = Dataset(source='genmc', steps=[])
 
     plots: dict[str, Plot1D | Plot2D] = {}
     for name, spec in raw['plots'].items():

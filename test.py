@@ -1,5 +1,4 @@
 import laddu as ld
-import os
 import polars as pl
 import time
 
@@ -9,6 +8,6 @@ with ld.mpi.MPI():
     print('done')
     time.sleep(10)
     print('reading dataset')
-    ld.Dataset.from_polars(df)
+    ld.io.from_polars(df)
     print('done')
     time.sleep(10)
